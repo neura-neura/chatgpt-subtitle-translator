@@ -19,6 +19,7 @@ const MODEL = "MODEL"
 
 const DefaultModel = "gpt-4o-mini"
 const DefaultTemperature = 0
+const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
 
 export function TranslatorApplication() {
   // Translator Configuration
@@ -50,6 +51,7 @@ export function TranslatorApplication() {
   // Translator Stats
   const [usageInformation, setUsageInformation] = useState(/** @type {typeof Translator.prototype.usage}*/(null))
   const [RPMInfomation, setRPMInformation] = useState(0)
+  const [siteOrigin, setSiteOrigin] = useState("")
 
   // Persistent Data Restoration
   useEffect(() => {
@@ -57,7 +59,11 @@ export function TranslatorApplication() {
     setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
     setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
     setModelValue(localStorage.getItem(MODEL) ?? DefaultModel)
+    setSiteOrigin(window.location.origin)
   }, [])
+
+  const isGitHubPages = siteOrigin.includes("github.io")
+  const showOllamaCorsHint = isGitHubPages && (baseUrlValue ?? "").includes("localhost:11434")
 
   function setAPIKey(value) {
     localStorage.setItem(OPENAI_API_KEY, value)
@@ -211,6 +217,17 @@ export function TranslatorApplication() {
               </CardHeader>
               <CardBody>
                 <div className='flex flex-wrap justify-between w-full gap-4'>
+                  {isGitHubPages && (
+                    <Card shadow="sm" className="w-full border border-warning-200 bg-warning-50">
+                      <CardBody className="gap-1 text-sm">
+                        <p><b>Using Ollama from GitHub Pages</b></p>
+                        <p>
+                          On this PC, use API Key <code>ollama</code>, Base URL <code>{DefaultOllamaBaseUrl}</code>,
+                          disable structured mode, and allow <code>{siteOrigin}</code> in <code>OLLAMA_ORIGINS</code>.
+                        </p>
+                      </CardBody>
+                    </Card>
+                  )}
                   <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
                     <Input
                       className="w-full md:w-6/12"
@@ -222,7 +239,7 @@ export function TranslatorApplication() {
                       autoComplete='off'
                       label="OpenAI API Key"
                       variant="flat"
-                      description="API Key is stored locally in browser"
+                      description='Stored locally in browser. Use "ollama" for local Ollama.'
                       endContent={
                         <button className="focus:outline-none" type="button" onClick={toggleAPIInputVisibility}>
                           {isAPIInputVisible ? (
@@ -239,12 +256,19 @@ export function TranslatorApplication() {
                       size='sm'
                       type="text"
                       label="OpenAI Base Url"
-                      placeholder="https://api.openai.com/v1"
+                      placeholder={DefaultOllamaBaseUrl}
                       autoComplete='on'
                       value={baseUrlValue ?? ""}
                       onValueChange={setBaseUrl}
+                      description={`For local Ollama: ${DefaultOllamaBaseUrl}`}
                     />
                   </div>
+
+                  {showOllamaCorsHint && (
+                    <p className="w-full text-xs text-warning-700">
+                      If requests fail in GitHub Pages, restart Ollama after setting <code>OLLAMA_ORIGINS={siteOrigin}</code> in Windows environment variables.
+                    </p>
+                  )}
 
                   <div className='flex w-full gap-4'>
                     <Input

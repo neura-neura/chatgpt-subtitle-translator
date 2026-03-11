@@ -7,6 +7,23 @@ This utility uses the OpenAI ChatGPT API to translate text, with a specific focu
 
 ## Web Interface: <https://cerlancism.github.io/chatgpt-subtitle-translator>  
 
+### GitHub Pages + Ollama
+
+This project can be deployed to GitHub Pages while using a locally running [Ollama](https://ollama.com/) instance as the model provider.
+
+1. Deploy the `web/` app to GitHub Pages
+2. Run Ollama on the same PC where you open the GitHub Pages site
+3. In Ollama, allow your GitHub Pages origin via `OLLAMA_ORIGINS`
+4. In the web app, use:
+   - API Key: `ollama`
+   - Base URL: `http://localhost:11434/v1`
+   - Structured Mode: disabled
+
+See:
+- [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
+- [Ollama FAQ: OLLAMA_ORIGINS](https://docs.ollama.com/faq)
+- [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/about-github-pages)
+
 ## Features
 - Web User Interface (Web UI) and Command Line Interface (CLI)  
 - Supports [Structured Output](https://openai.com/index/introducing-structured-outputs-in-the-api/): for more concise results, enabled by default in the Web UI and CLI
