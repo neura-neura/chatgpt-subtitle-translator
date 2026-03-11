@@ -16,6 +16,7 @@ const OPENAI_API_KEY = "OPENAI_API_KEY"
 const OPENAI_BASE_URL = "OPENAI_BASE_URL"
 const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
+const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 
 const DefaultModel = "gpt-4o-mini"
 const DefaultTemperature = 0
@@ -52,6 +53,7 @@ export function TranslatorApplication() {
   const [usageInformation, setUsageInformation] = useState(/** @type {typeof Translator.prototype.usage}*/(null))
   const [RPMInfomation, setRPMInformation] = useState(0)
   const [siteOrigin, setSiteOrigin] = useState("")
+  const [hideOllamaPagesHint, setHideOllamaPagesHint] = useState(false)
 
   // Persistent Data Restoration
   useEffect(() => {
@@ -60,10 +62,12 @@ export function TranslatorApplication() {
     setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
     setModelValue(localStorage.getItem(MODEL) ?? DefaultModel)
     setSiteOrigin(window.location.origin)
+    setHideOllamaPagesHint(localStorage.getItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED) === "true")
   }, [])
 
   const isGitHubPages = siteOrigin.includes("github.io")
-  const showOllamaCorsHint = isGitHubPages && (baseUrlValue ?? "").includes("localhost:11434")
+  const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
+  const showOllamaCorsHint = showOllamaPagesHint && (baseUrlValue ?? "").includes("localhost:11434")
 
   function setAPIKey(value) {
     localStorage.setItem(OPENAI_API_KEY, value)
@@ -109,6 +113,15 @@ export function TranslatorApplication() {
       localStorage.setItem(MODEL, value)
     }
     setModel(value)
+  }
+
+  function closeOllamaPagesHint() {
+    setHideOllamaPagesHint(true)
+  }
+
+  function dismissOllamaPagesHintForever() {
+    localStorage.setItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED, "true")
+    setHideOllamaPagesHint(true)
   }
 
   async function generate(e) {
@@ -217,14 +230,43 @@ export function TranslatorApplication() {
               </CardHeader>
               <CardBody>
                 <div className='flex flex-wrap justify-between w-full gap-4'>
-                  {isGitHubPages && (
+                  {showOllamaPagesHint && (
                     <Card shadow="sm" className="w-full border border-warning-200 bg-warning-50">
-                      <CardBody className="gap-1 text-sm">
-                        <p><b>Using Ollama from GitHub Pages</b></p>
-                        <p>
-                          On this PC, use API Key <code>ollama</code>, Base URL <code>{DefaultOllamaBaseUrl}</code>,
-                          disable structured mode, and allow <code>{siteOrigin}</code> in <code>OLLAMA_ORIGINS</code>.
-                        </p>
+                      <CardBody className="gap-3 text-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p><b>Using Ollama from GitHub Pages</b></p>
+                            <p>
+                              This GitHub Pages site runs in your browser, so Ollama must allow requests from
+                              <code> {siteOrigin}</code> to reach <code>{DefaultOllamaBaseUrl}</code>.
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="light" onClick={closeOllamaPagesHint}>
+                              Close
+                            </Button>
+                            <Button size="sm" color="warning" variant="flat" onClick={dismissOllamaPagesHintForever}>
+                              Don't show again
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-1">
+                          <p><b>Use these values in this page</b></p>
+                          <p>API Key: <code>ollama</code></p>
+                          <p>Base URL: <code>{DefaultOllamaBaseUrl}</code></p>
+                          <p>Structured Mode: <code>off</code></p>
+                        </div>
+
+                        <div className="grid gap-1">
+                          <p><b>How to allow this site in Windows</b></p>
+                          <p>1. Close Ollama from the Windows system tray.</p>
+                          <p>2. Open the Start menu and search for <code>environment variables</code>.</p>
+                          <p>3. Open <code>Edit environment variables for your account</code>.</p>
+                          <p>4. Create or edit <code>OLLAMA_ORIGINS</code>.</p>
+                          <p>5. Set it to <code>{siteOrigin}</code>.</p>
+                          <p>6. Start Ollama again.</p>
+                        </div>
                       </CardBody>
                     </Card>
                   )}
