@@ -40,6 +40,7 @@ export function TranslatorApplication() {
   const [systemInstructionDescription, setSystemInstructionDescription] = useState("")
   const [savedSystemInstructions, setSavedSystemInstructions] = useState([])
   const [showInstructionLibrary, setShowInstructionLibrary] = useState(false)
+  const [focusInstructionTitle, setFocusInstructionTitle] = useState(false)
 
   const [isAPIInputVisible, setIsAPIInputVisible] = useState(false)
   const toggleAPIInputVisibility = () => setIsAPIInputVisible(!isAPIInputVisible)
@@ -79,6 +80,21 @@ export function TranslatorApplication() {
       setSavedSystemInstructions([])
     }
   }, [])
+
+  useEffect(() => {
+    if (!focusInstructionTitle) {
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const titleInput = document.getElementById("system-instruction-title")
+      titleInput?.focus()
+      titleInput?.select?.()
+      setFocusInstructionTitle(false)
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [focusInstructionTitle, showInstructionLibrary])
 
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
@@ -146,8 +162,15 @@ export function TranslatorApplication() {
       return
     }
 
-    if (!systemInstructionTitle.trim()) {
+    if (!showInstructionLibrary) {
       setShowInstructionLibrary(true)
+      setSystemInstructionDescription(systemInstruction.trim())
+      setFocusInstructionTitle(true)
+      return
+    }
+
+    if (!systemInstructionTitle.trim()) {
+      setFocusInstructionTitle(true)
       alert("Add an Instruction Title before saving.")
       return
     }
@@ -161,6 +184,16 @@ export function TranslatorApplication() {
     }
 
     persistSystemInstructionPresets([nextPreset, ...savedSystemInstructions])
+    clearSystemInstructionPresetForm()
+  }
+
+  function saveSystemInstructionPresetFromTitleEnter(event) {
+    if (event.key !== "Enter") {
+      return
+    }
+
+    event.preventDefault()
+    saveSystemInstructionPreset()
   }
 
   function applySystemInstructionPreset(preset) {
@@ -491,6 +524,7 @@ export function TranslatorApplication() {
                     <>
                       <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
                         <Input
+                          id="system-instruction-title"
                           className='w-full md:w-5/12'
                           size='sm'
                           type="text"
@@ -498,6 +532,7 @@ export function TranslatorApplication() {
                           placeholder="Anime JP -> ES"
                           value={systemInstructionTitle}
                           onValueChange={setSystemInstructionTitle}
+                          onKeyDown={saveSystemInstructionPresetFromTitleEnter}
                           description="Required to save"
                         />
                         <Input
