@@ -45,7 +45,7 @@ export function buildTranslatedSrtFileName(fileName, language) {
 
 export function buildCombinedSrtFileName(fileName, primaryLanguage, secondaryLanguage) {
   const baseName = getFileBaseName(fileName, "combined")
-  const primarySuffix = slugifyFilePart(primaryLanguage, "source")
+  const primarySuffix = slugifyFilePart(primaryLanguage, "to")
   const secondarySuffix = slugifyFilePart(secondaryLanguage, "translated")
   return `${baseName}_${primarySuffix}_${secondarySuffix}.srt`
 }
