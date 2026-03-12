@@ -39,7 +39,7 @@ export function TranslatorApplication() {
   const [systemInstructionTitle, setSystemInstructionTitle] = useState("")
   const [systemInstructionDescription, setSystemInstructionDescription] = useState("")
   const [savedSystemInstructions, setSavedSystemInstructions] = useState([])
-  const [selectedSystemInstructionId, setSelectedSystemInstructionId] = useState("")
+  const [showInstructionLibrary, setShowInstructionLibrary] = useState(false)
 
   const [isAPIInputVisible, setIsAPIInputVisible] = useState(false)
   const toggleAPIInputVisibility = () => setIsAPIInputVisible(!isAPIInputVisible)
@@ -136,17 +136,23 @@ export function TranslatorApplication() {
   }
 
   function clearSystemInstructionPresetForm() {
-    setSelectedSystemInstructionId("")
     setSystemInstructionTitle("")
     setSystemInstructionDescription("")
   }
 
   function saveSystemInstructionPreset() {
-    if (!systemInstruction.trim() || !systemInstructionTitle.trim() || !systemInstructionDescription.trim()) {
+    if (!systemInstruction.trim()) {
+      alert("Write the System Instruction first.")
       return
     }
 
-    const presetId = selectedSystemInstructionId || crypto.randomUUID()
+    if (!systemInstructionTitle.trim()) {
+      setShowInstructionLibrary(true)
+      alert("Add an Instruction Title before saving.")
+      return
+    }
+
+    const presetId = crypto.randomUUID()
     const nextPreset = {
       id: presetId,
       title: systemInstructionTitle.trim(),
@@ -154,28 +160,16 @@ export function TranslatorApplication() {
       text: systemInstruction.trim()
     }
 
-    const nextPresets = selectedSystemInstructionId
-      ? savedSystemInstructions.map(preset => preset.id === presetId ? nextPreset : preset)
-      : [nextPreset, ...savedSystemInstructions]
-
-    persistSystemInstructionPresets(nextPresets)
-    setSelectedSystemInstructionId(presetId)
+    persistSystemInstructionPresets([nextPreset, ...savedSystemInstructions])
   }
 
   function applySystemInstructionPreset(preset) {
-    setSelectedSystemInstructionId(preset.id)
-    setSystemInstructionTitle(preset.title)
-    setSystemInstructionDescription(preset.description)
-    setSystemInstruction(preset.text)
+    setSystemInstruction(preset.text?.trim() || preset.description?.trim() || "")
   }
 
   function deleteSystemInstructionPreset(presetId) {
     const nextPresets = savedSystemInstructions.filter(preset => preset.id !== presetId)
     persistSystemInstructionPresets(nextPresets)
-
-    if (selectedSystemInstructionId === presetId) {
-      clearSystemInstructionPresetForm()
-    }
   }
 
   function closeOllamaPagesHint() {
@@ -468,77 +462,94 @@ export function TranslatorApplication() {
                     <Textarea
                       label="System Instruction"
                       minRows={2}
-                      description={"Override preset system instruction"}
+                      description={"Override preset system instruction. Save stores this exact text."}
                       placeholder={`Translate ${fromLanguage ? fromLanguage + " " : ""}to ${toLanguage}`}
                       value={systemInstruction}
                       onValueChange={setSystemInstruction}
                     />
                   </div>
 
-                  <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
-                    <Input
-                      className='w-full md:w-4/12'
-                      size='sm'
-                      type="text"
-                      label="Instruction Title"
-                      placeholder="Anime JP -> ES"
-                      value={systemInstructionTitle}
-                      onValueChange={setSystemInstructionTitle}
-                    />
-                    <Input
-                      className='w-full md:w-5/12'
-                      size='sm'
-                      type="text"
-                      label="Instruction Description"
-                      placeholder="Keep honorifics, concise subtitles, natural Spanish"
-                      value={systemInstructionDescription}
-                      onValueChange={setSystemInstructionDescription}
-                    />
-                    <div className='w-full md:w-3/12 flex items-end gap-2'>
-                      <Button
-                        className='w-full'
-                        type='button'
-                        color="primary"
-                        variant="flat"
-                        onClick={saveSystemInstructionPreset}
-                        isDisabled={!systemInstruction.trim() || !systemInstructionTitle.trim() || !systemInstructionDescription.trim()}
-                      >
-                        Save Instruction
-                      </Button>
-                      <Button
-                        type='button'
-                        variant="light"
-                        onClick={clearSystemInstructionPresetForm}
-                      >
-                        Clear
-                      </Button>
-                    </div>
+                  <div className='flex flex-wrap items-center gap-2 w-full'>
+                    <Button
+                      type='button'
+                      color="primary"
+                      variant="flat"
+                      onClick={saveSystemInstructionPreset}
+                    >
+                      Save Current Instruction
+                    </Button>
+                    <Button
+                      type='button'
+                      variant="light"
+                      onClick={() => setShowInstructionLibrary(value => !value)}
+                    >
+                      {showInstructionLibrary ? "Hide Saved Instructions" : "Show Saved Instructions"}
+                    </Button>
                   </div>
 
-                  {savedSystemInstructions.length > 0 && (
-                    <div className='w-full'>
-                      <p className='text-sm font-semibold mb-2'>Saved System Instructions</p>
-                      <div className='grid gap-3'>
-                        {savedSystemInstructions.map((preset) => (
-                          <Card key={preset.id} shadow="sm" className={`border ${selectedSystemInstructionId === preset.id ? 'border-primary' : ''}`}>
-                            <CardBody className="flex flex-wrap md:flex-nowrap items-start justify-between gap-3">
-                              <div className='flex-1'>
-                                <p className='font-semibold'>{preset.title}</p>
-                                <p className='text-sm text-default-500'>{preset.description}</p>
-                              </div>
-                              <div className='flex gap-2'>
-                                <Button type='button' size='sm' color="primary" variant="flat" onClick={() => applySystemInstructionPreset(preset)}>
-                                  Use
-                                </Button>
-                                <Button type='button' size='sm' color="danger" variant="light" onClick={() => deleteSystemInstructionPreset(preset.id)}>
-                                  Delete
-                                </Button>
-                              </div>
-                            </CardBody>
-                          </Card>
-                        ))}
+                  {showInstructionLibrary && (
+                    <>
+                      <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
+                        <Input
+                          className='w-full md:w-5/12'
+                          size='sm'
+                          type="text"
+                          label="Instruction Title"
+                          placeholder="Anime JP -> ES"
+                          value={systemInstructionTitle}
+                          onValueChange={setSystemInstructionTitle}
+                          description="Required to save"
+                        />
+                        <Input
+                          className='w-full md:w-5/12'
+                          size='sm'
+                          type="text"
+                          label="Instruction Description"
+                          placeholder="Optional note shown in the saved list"
+                          value={systemInstructionDescription}
+                          onValueChange={setSystemInstructionDescription}
+                          description="Metadata only. Use applies the saved System Instruction text."
+                        />
+                        <div className='w-full md:w-2/12 flex items-end'>
+                          <Button
+                            className='w-full'
+                            type='button'
+                            variant="light"
+                            onClick={clearSystemInstructionPresetForm}
+                          >
+                            Clear Meta
+                          </Button>
+                        </div>
                       </div>
-                    </div>
+
+                      {savedSystemInstructions.length > 0 && (
+                        <div className='w-full'>
+                          <p className='text-sm font-semibold mb-2'>Saved System Instructions</p>
+                          <div className='grid gap-3'>
+                            {savedSystemInstructions.map((preset) => (
+                              <Card key={preset.id} shadow="sm" className='border'>
+                                <CardBody className="flex flex-wrap md:flex-nowrap items-start justify-between gap-3">
+                                  <div className='flex-1'>
+                                    <p className='font-semibold'>{preset.title}</p>
+                                    {preset.description && (
+                                      <p className='text-sm text-default-500'>{preset.description}</p>
+                                    )}
+                                  </div>
+                                  <div className='flex gap-2'>
+                                    <Button type='button' size='sm' color="primary" variant="flat" onClick={() => applySystemInstructionPreset(preset)}>
+                                      Use
+                                    </Button>
+                                    <Button type='button' size='sm' color="danger" variant="light" onClick={() => deleteSystemInstructionPreset(preset.id)}>
+                                      Delete
+                                    </Button>
+                                  </div>
+                                </CardBody>
+                              </Card>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
 
                   <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
