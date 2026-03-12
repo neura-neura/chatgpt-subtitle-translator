@@ -1,14 +1,15 @@
 "use client"
 import React, { useEffect, useRef, useState } from 'react'
-import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider } from "@nextui-org/react";
+import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent } from "@nextui-org/react";
 
 import { EyeSlashFilledIcon } from './EyeSlashFilledIcon';
 import { EyeFilledIcon } from './EyeFilledIcon';
 
 import { FileUploadButton } from '@/components/FileUploadButton';
 import { SubtitleCard } from '@/components/SubtitleCard';
-import { downloadString } from '@/utils/download';
+import { buildCombinedSrtFileName, buildTranslatedSrtFileName, downloadString } from '@/utils/download';
 import { sampleSrt } from '@/data/sample';
+import { buildCombinedSrtText, combineSubtitles, parseSubtitleText } from '@/utils/subtitleMerge';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -16,6 +17,7 @@ const OPENAI_API_KEY = "OPENAI_API_KEY"
 const OPENAI_BASE_URL = "OPENAI_BASE_URL"
 const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
+const TO_LANGUAGE = "TO_LANGUAGE"
 const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
@@ -51,6 +53,10 @@ export function TranslatorApplication() {
   const [inputs, setInputs] = useState(subtitleParser.fromSrt(sampleSrt).map(x => x.text))
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
+  const [importedSubtitleFileName, setImportedSubtitleFileName] = useState("")
+  const [mergePrimarySubtitle, setMergePrimarySubtitle] = useState(null)
+  const [mergeSecondarySubtitle, setMergeSecondarySubtitle] = useState(null)
+  const [mergeStatusMessage, setMergeStatusMessage] = useState("")
   const [translatorRunningState, setTranslatorRunningState] = useState(false)
   /** @type {React.RefObject<Translator>} */
   const translatorRef = useRef(null)
@@ -70,6 +76,7 @@ export function TranslatorApplication() {
     setAPIValue(localStorage.getItem(OPENAI_API_KEY) ?? "")
     setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
     setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
+    setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
     const storedModel = localStorage.getItem(MODEL)
     setModelValue(!storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel)
     setSiteOrigin(window.location.origin)
@@ -125,6 +132,16 @@ export function TranslatorApplication() {
     setBaseUrlValue(value)
   }
 
+  function setToLanguageValue(value) {
+    if (!value) {
+      localStorage.removeItem(TO_LANGUAGE)
+    }
+    else {
+      localStorage.setItem(TO_LANGUAGE, value)
+    }
+    setToLanguage(value)
+  }
+
   /**
    * @param {string} value
    */
@@ -154,6 +171,59 @@ export function TranslatorApplication() {
   function clearSystemInstructionPresetForm() {
     setSystemInstructionTitle("")
     setSystemInstructionDescription("")
+  }
+
+  async function loadMergeSubtitleFile(file, slot) {
+    if (!file) {
+      return
+    }
+
+    try {
+      const fileText = await file.text()
+      const nextSubtitle = {
+        name: file.name,
+        text: fileText,
+        source: "manual",
+      }
+
+      if (slot === "primary") {
+        setMergePrimarySubtitle(nextSubtitle)
+      }
+      else {
+        setMergeSecondarySubtitle(nextSubtitle)
+      }
+
+      setMergeStatusMessage("")
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
+  function combineAndDownloadSubtitles() {
+    if (!mergePrimarySubtitle || !mergeSecondarySubtitle) {
+      alert("Choose both subtitle files before combining.")
+      return
+    }
+
+    const primary = parseSubtitleText(mergePrimarySubtitle.name, mergePrimarySubtitle.text)
+    const secondary = parseSubtitleText(mergeSecondarySubtitle.name, mergeSecondarySubtitle.text)
+
+    if (!primary.subtitles.length) {
+      alert("Failed to parse the TOP subtitle.")
+      return
+    }
+
+    if (!secondary.subtitles.length) {
+      alert("Failed to parse the BOTTOM subtitle.")
+      return
+    }
+
+    const combinedSubtitles = combineSubtitles(primary.subtitles, secondary.subtitles, primary.format, "{\\rENG}", true)
+    const combinedSrtText = buildCombinedSrtText(combinedSubtitles)
+    const combinedFileName = buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage)
+
+    downloadString(combinedSrtText, "text/plain", combinedFileName)
+    setMergeStatusMessage(`Downloaded ${combinedFileName}`)
   }
 
   function saveSystemInstructionPreset() {
@@ -321,7 +391,14 @@ export function TranslatorApplication() {
         setRPMInformation(translatorRef.current.services.cooler?.rate)
       }
       console.log({ sourceInputWorkingCopy: outputWorkingProgress })
-      setSrtOutputText(subtitleParser.toSrt(outputWorkingProgress))
+      const translatedSrt = subtitleParser.toSrt(outputWorkingProgress)
+      setSrtOutputText(translatedSrt)
+      setMergeSecondarySubtitle({
+        name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
+        text: translatedSrt,
+        source: "generated",
+      })
+      setMergeStatusMessage("")
     } catch (error) {
       console.error(error)
       alert(error?.message ?? error)
@@ -338,6 +415,14 @@ export function TranslatorApplication() {
       translatorRef.current.abort()
     }
   }
+
+  const translatedExportFileName = buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage)
+  const combinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || importedSubtitleFileName, fromLanguage, toLanguage)
+  const mergePrimaryLabel = mergePrimarySubtitle?.name ?? "Choose the top subtitle"
+  const mergeSecondaryLabel = mergeSecondarySubtitle?.source === "generated"
+    ? translatedExportFileName
+    : mergeSecondarySubtitle?.name ?? "Choose the bottom subtitle"
+  const canMergeSubtitles = Boolean(mergePrimarySubtitle?.text && mergeSecondarySubtitle?.text)
 
   return (
     <>
@@ -487,7 +572,7 @@ export function TranslatorApplication() {
                       label="To Language"
                       autoComplete='on'
                       value={toLanguage}
-                      onValueChange={setToLanguage}
+                      onValueChange={setToLanguageValue}
                     />
                   </div>
 
@@ -666,13 +751,23 @@ export function TranslatorApplication() {
         </form>
 
         <div className='w-full justify-between md:justify-center flex flex-wrap gap-1 sm:gap-4 mt-auto sticky top-0 backdrop-blur px-4 pt-4'>
-          <FileUploadButton label={"Import SRT"} onFileSelect={async (file) => {
+          <FileUploadButton label={"Import SRT"} accept=".srt" inputId="import-srt-input" onFileSelect={async (file) => {
             // console.log("File", file);
             try {
               const text = await file.text()
               const parsed = subtitleParser.fromSrt(text)
               setSrtInputText(text)
               setInputs(parsed.map(x => x.text))
+              setImportedSubtitleFileName(file.name)
+              setMergePrimarySubtitle({
+                name: file.name,
+                text,
+                source: "imported",
+              })
+              setMergeSecondarySubtitle(null)
+              setMergeStatusMessage("")
+              setOutput([])
+              setStreamOutput("")
             } catch (error) {
               alert(error.message ?? error)
             }
@@ -691,10 +786,68 @@ export function TranslatorApplication() {
 
           <Button color="primary" onClick={() => {
             // console.log(srtOutputText)
-            downloadString(srtOutputText, "text/plain", "export.srt")
+            downloadString(srtOutputText, "text/plain", translatedExportFileName)
           }}>
             Export SRT
           </Button>
+          <div className='flex'>
+            <Button color="secondary" onClick={combineAndDownloadSubtitles} isDisabled={!canMergeSubtitles}>
+              Merge Bilingual
+            </Button>
+            <Popover placement="bottom-end">
+              <PopoverTrigger>
+                <Button color="secondary" variant="flat" isIconOnly aria-label="Open bilingual merge options">
+                  v
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent>
+                <div className='w-80 p-3 flex flex-col gap-3'>
+                  <div>
+                    <p className='text-sm font-semibold'>Merge top and bottom subtitles</p>
+                    <p className='text-xs text-default-500'>
+                      The current import is used as the top subtitle and the latest translated SRT is used as the bottom subtitle by default.
+                      You can replace either one here with files from your computer.
+                    </p>
+                  </div>
+
+                  <div className='grid gap-2'>
+                    <div>
+                      <p className='text-xs font-semibold text-default-600 mb-1'>Top subtitle</p>
+                      <FileUploadButton
+                        label="Choose Top Subtitle"
+                        accept=".srt,.ass"
+                        inputId="merge-top-subtitle-input"
+                        buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
+                        onFileSelect={(file) => loadMergeSubtitleFile(file, "primary")}
+                      />
+                      <p className='text-xs text-default-500 mt-1 break-all'>{mergePrimaryLabel}</p>
+                    </div>
+
+                    <div>
+                      <p className='text-xs font-semibold text-default-600 mb-1'>Bottom subtitle</p>
+                      <FileUploadButton
+                        label="Choose Bottom Subtitle"
+                        accept=".srt,.ass"
+                        inputId="merge-bottom-subtitle-input"
+                        buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
+                        onFileSelect={(file) => loadMergeSubtitleFile(file, "secondary")}
+                      />
+                      <p className='text-xs text-default-500 mt-1 break-all'>{mergeSecondaryLabel}</p>
+                    </div>
+                  </div>
+
+                  <div className='text-xs text-default-500'>
+                    Combined file name: <code>{combinedExportFileName}</code>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+          {mergeStatusMessage && (
+            <p className='text-sm text-success break-all'>
+              {mergeStatusMessage}
+            </p>
+          )}
           <Divider className='mt-3 sm:mt-0' />
         </div>
 
