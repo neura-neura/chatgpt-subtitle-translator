@@ -275,3 +275,7 @@ export function buildCombinedSrtText(combinedSubtitles) {
 
   return `${srtCombined.join("\n\n")}\n`
 }
+
+export function removeREngTag(text) {
+  return text.split("{\\rENG}").join("")
+}

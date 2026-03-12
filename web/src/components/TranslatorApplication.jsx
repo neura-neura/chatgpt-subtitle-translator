@@ -7,9 +7,9 @@ import { EyeFilledIcon } from './EyeFilledIcon';
 
 import { FileUploadButton } from '@/components/FileUploadButton';
 import { SubtitleCard } from '@/components/SubtitleCard';
-import { buildCombinedSrtFileName, buildTranslatedSrtFileName, downloadString } from '@/utils/download';
+import { appendFileNameSuffix, buildCombinedSrtFileName, buildTranslatedSrtFileName, downloadString } from '@/utils/download';
 import { sampleSrt } from '@/data/sample';
-import { buildCombinedSrtText, combineSubtitles, parseSubtitleText } from '@/utils/subtitleMerge';
+import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -73,6 +73,7 @@ export function TranslatorApplication() {
   const [importedSubtitleFileName, setImportedSubtitleFileName] = useState("")
   const [mergePrimarySubtitle, setMergePrimarySubtitle] = useState(null)
   const [mergeSecondarySubtitle, setMergeSecondarySubtitle] = useState(null)
+  const [keepMergeLanguageTag, setKeepMergeLanguageTag] = useState(true)
   const [mergeStatusMessage, setMergeStatusMessage] = useState("")
   const [translatorRunningState, setTranslatorRunningState] = useState(false)
   /** @type {React.RefObject<Translator>} */
@@ -252,8 +253,12 @@ export function TranslatorApplication() {
     }
 
     const combinedSubtitles = combineSubtitles(primary.subtitles, secondary.subtitles, primary.format, "{\\rENG}", true)
-    const combinedSrtText = buildCombinedSrtText(combinedSubtitles)
-    const combinedFileName = buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage)
+    const combinedFileName = keepMergeLanguageTag
+      ? buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage)
+      : appendFileNameSuffix(buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage), "sin_rENG")
+    const combinedSrtText = keepMergeLanguageTag
+      ? buildCombinedSrtText(combinedSubtitles)
+      : removeREngTag(buildCombinedSrtText(combinedSubtitles))
 
     downloadString(combinedSrtText, "text/plain", combinedFileName)
     setMergeStatusMessage(`Downloaded ${combinedFileName}`)
@@ -450,7 +455,10 @@ export function TranslatorApplication() {
   }
 
   const translatedExportFileName = buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage)
-  const combinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || importedSubtitleFileName, fromLanguage, toLanguage)
+  const baseCombinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || importedSubtitleFileName, fromLanguage, toLanguage)
+  const combinedExportFileName = keepMergeLanguageTag
+    ? baseCombinedExportFileName
+    : appendFileNameSuffix(baseCombinedExportFileName, "sin_rENG")
   const mergePrimaryLabel = mergePrimarySubtitle?.name ?? "Choose the top subtitle"
   const mergeSecondaryLabel = mergeSecondarySubtitle?.source === "generated"
     ? translatedExportFileName
@@ -876,6 +884,21 @@ export function TranslatorApplication() {
                         onFileSelect={(file) => loadMergeSubtitleFile(file, "secondary")}
                       />
                       <p className='text-xs text-default-500 mt-1 break-all'>{mergeSecondaryLabel}</p>
+                    </div>
+                  </div>
+
+                  <div className='flex gap-3 rounded-xl bg-default-50 px-3 py-3'>
+                    <Switch
+                      size='sm'
+                      isSelected={keepMergeLanguageTag}
+                      onValueChange={setKeepMergeLanguageTag}
+                    >
+                    </Switch>
+                    <div className='flex flex-col gap-1'>
+                      <p className='text-sm font-semibold'>Keep {"{\\rENG}"} tag</p>
+                      <p className='text-xs text-default-500'>
+                        Turn this off to remove the exact raw string {"{\\rENG}"} from the exported combined SRT, matching your Python cleanup script.
+                      </p>
                     </div>
                   </div>
 

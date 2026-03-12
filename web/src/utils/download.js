@@ -49,3 +49,10 @@ export function buildCombinedSrtFileName(fileName, primaryLanguage, secondaryLan
   const secondarySuffix = slugifyFilePart(secondaryLanguage, "translated")
   return `${baseName}_${primarySuffix}_${secondarySuffix}.srt`
 }
+
+export function appendFileNameSuffix(fileName, suffix) {
+  const baseName = getFileBaseName(fileName, "export")
+  const extensionIndex = (fileName ?? "").trim().lastIndexOf(".")
+  const extension = extensionIndex > -1 ? fileName.slice(extensionIndex) : ".srt"
+  return `${baseName}_${suffix}${extension}`
+}
