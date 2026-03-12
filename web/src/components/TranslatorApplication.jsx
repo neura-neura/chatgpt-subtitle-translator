@@ -209,7 +209,7 @@ export function TranslatorApplication() {
       setConnectionTestMessage(
         hasSelectedModel
           ? `Connected. ${model} is available in Ollama.`
-          : `Connected. Ollama responded and exposed ${models.length} model(s).`
+          : `Connected, but ${model} is not installed in Ollama. Install it with: ollama pull ${model}. Ollama currently exposed ${models.length} model(s).`
       )
     } catch (error) {
       setConnectionTestState("error")
