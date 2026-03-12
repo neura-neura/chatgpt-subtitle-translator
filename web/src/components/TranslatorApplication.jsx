@@ -26,6 +26,23 @@ const DefaultModel = "gemma3:12b-it-qat"
 const DefaultTemperature = 0
 const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
 
+function ChevronDownIcon(props) {
+  return (
+    <svg aria-hidden="true" fill="none" focusable="false" height="16" viewBox="0 0 24 24" width="16" {...props}>
+      <path d="M6 9l6 6 6-6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  )
+}
+
+function CloseIcon(props) {
+  return (
+    <svg aria-hidden="true" fill="none" focusable="false" height="14" viewBox="0 0 24 24" width="14" {...props}>
+      <path d="M6 6l12 12" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="M18 6l-12 12" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  )
+}
+
 export function TranslatorApplication() {
   // Translator Configuration
   const [APIvalue, setAPIValue] = useState("")
@@ -103,6 +120,18 @@ export function TranslatorApplication() {
     return () => window.cancelAnimationFrame(frame)
   }, [focusInstructionTitle, showInstructionLibrary])
 
+  useEffect(() => {
+    if (!mergeStatusMessage) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setMergeStatusMessage("")
+    }, 5000)
+
+    return () => window.clearTimeout(timeout)
+  }, [mergeStatusMessage])
+
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
   const showOllamaCorsHint = showOllamaPagesHint && (baseUrlValue ?? "").includes("localhost:11434")
@@ -171,6 +200,10 @@ export function TranslatorApplication() {
   function clearSystemInstructionPresetForm() {
     setSystemInstructionTitle("")
     setSystemInstructionDescription("")
+  }
+
+  function dismissMergeToast() {
+    setMergeStatusMessage("")
   }
 
   async function loadMergeSubtitleFile(file, slot) {
@@ -790,14 +823,24 @@ export function TranslatorApplication() {
           }}>
             Export SRT
           </Button>
-          <div className='flex'>
-            <Button color="secondary" onClick={combineAndDownloadSubtitles} isDisabled={!canMergeSubtitles}>
+          <div className='flex items-stretch overflow-hidden rounded-2xl shadow-sm ring-1 ring-secondary/20'>
+            <Button
+              color="secondary"
+              className='rounded-r-none rounded-l-2xl px-5 font-semibold'
+              onClick={combineAndDownloadSubtitles}
+              isDisabled={!canMergeSubtitles}
+            >
               Merge Bilingual
             </Button>
             <Popover placement="bottom-end">
               <PopoverTrigger>
-                <Button color="secondary" variant="flat" isIconOnly aria-label="Open bilingual merge options">
-                  v
+                <Button
+                  color="secondary"
+                  className='rounded-l-none rounded-r-2xl min-w-11 w-11 border-l border-white/20 bg-secondary-600'
+                  isIconOnly
+                  aria-label="Open bilingual merge options"
+                >
+                  <ChevronDownIcon />
                 </Button>
               </PopoverTrigger>
               <PopoverContent>
@@ -843,11 +886,6 @@ export function TranslatorApplication() {
               </PopoverContent>
             </Popover>
           </div>
-          {mergeStatusMessage && (
-            <p className='text-sm text-success break-all'>
-              {mergeStatusMessage}
-            </p>
-          )}
           <Divider className='mt-3 sm:mt-0' />
         </div>
 
@@ -906,6 +944,28 @@ export function TranslatorApplication() {
           </div>
         </div>
       </div>
+      {mergeStatusMessage && (
+        <div className='fixed bottom-4 right-4 z-50 max-w-md'>
+          <Card shadow="lg" className='border border-success-200 bg-success-50'>
+            <CardBody className='flex flex-row items-start gap-3 p-3'>
+              <div className='min-w-0 flex-1'>
+                <p className='text-sm font-semibold text-success-700'>Merge complete</p>
+                <p className='text-sm text-success-700 break-all'>{mergeStatusMessage}</p>
+              </div>
+              <Button
+                isIconOnly
+                size='sm'
+                variant='light'
+                className='text-success-700'
+                aria-label="Close merge notification"
+                onClick={dismissMergeToast}
+              >
+                <CloseIcon />
+              </Button>
+            </CardBody>
+          </Card>
+        </div>
+      )}
     </>
   )
 }
