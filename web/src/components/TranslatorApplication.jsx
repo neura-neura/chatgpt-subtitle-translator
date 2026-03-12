@@ -1,6 +1,6 @@
 "use client"
 import React, { useEffect, useRef, useState } from 'react'
-import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent } from "@nextui-org/react";
+import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent, Autocomplete, AutocompleteItem } from "@nextui-org/react";
 
 import { EyeSlashFilledIcon } from './EyeSlashFilledIcon';
 import { EyeFilledIcon } from './EyeFilledIcon';
@@ -17,6 +17,7 @@ const OPENAI_API_KEY = "OPENAI_API_KEY"
 const OPENAI_BASE_URL = "OPENAI_BASE_URL"
 const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
+const MODEL_HISTORY = "MODEL_HISTORY"
 const TO_LANGUAGE = "TO_LANGUAGE"
 const SYSTEM_INSTRUCTION = "SYSTEM_INSTRUCTION"
 const KEEP_MERGE_LANGUAGE_TAG = "KEEP_MERGE_LANGUAGE_TAG"
@@ -24,7 +25,9 @@ const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
 const PreviousDefaultModel = "gpt-4o-mini"
-const DefaultModel = "gemma3:12b-it-qat"
+const DefaultModel = "translategemma12b-it-q4_K_M"
+const SecondaryDefaultModel = "gemma3:12b-it-qat"
+const DefaultModelOptions = [DefaultModel, SecondaryDefaultModel]
 const DefaultTemperature = 0
 const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
 
@@ -53,6 +56,7 @@ export function TranslatorApplication() {
   const [toLanguage, setToLanguage] = useState("English")
   const [systemInstruction, setSystemInstruction] = useState("")
   const [model, setModel] = useState(DefaultModel)
+  const [recentModelOptions, setRecentModelOptions] = useState([])
   const [temperature, setTemperature] = useState(DefaultTemperature)
   const [batchSizes, setBatchSizes] = useState([10, 50])
   const [useStructuredMode, setUseStructuredMode] = useState(false)
@@ -99,8 +103,18 @@ export function TranslatorApplication() {
     setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
     setSystemInstruction(localStorage.getItem(SYSTEM_INSTRUCTION) ?? "")
     setKeepMergeLanguageTag(localStorage.getItem(KEEP_MERGE_LANGUAGE_TAG) === "true")
+    let storedModelHistory = []
+    try {
+      storedModelHistory = JSON.parse(localStorage.getItem(MODEL_HISTORY) ?? "[]")
+    } catch {
+      storedModelHistory = []
+    }
     const storedModel = localStorage.getItem(MODEL)
-    setModelValue(!storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel)
+    const restoredModel = !storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel
+    const normalizedHistory = normalizeRecentModelOptions(storedModelHistory, restoredModel)
+    setRecentModelOptions(normalizedHistory)
+    localStorage.setItem(MODEL_HISTORY, JSON.stringify(normalizedHistory))
+    setModelValue(restoredModel)
     setSiteOrigin(window.location.origin)
     setHideOllamaPagesHint(localStorage.getItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED) === "true")
     try {
@@ -174,6 +188,39 @@ export function TranslatorApplication() {
       localStorage.setItem(TO_LANGUAGE, value)
     }
     setToLanguage(value)
+  }
+
+  function normalizeRecentModelOptions(modelOptions, currentModel = "") {
+    const uniqueModels = []
+    const currentValue = currentModel?.trim() ?? ""
+
+    for (const modelOption of [currentValue, ...(Array.isArray(modelOptions) ? modelOptions : [])]) {
+      const normalizedValue = typeof modelOption === "string" ? modelOption.trim() : ""
+      if (!normalizedValue || DefaultModelOptions.includes(normalizedValue) || uniqueModels.includes(normalizedValue)) {
+        continue
+      }
+      uniqueModels.push(normalizedValue)
+      if (uniqueModels.length === 5) {
+        break
+      }
+    }
+
+    return uniqueModels
+  }
+
+  function persistRecentModelOptions(modelOptions) {
+    const normalizedHistory = normalizeRecentModelOptions(modelOptions)
+    localStorage.setItem(MODEL_HISTORY, JSON.stringify(normalizedHistory))
+    setRecentModelOptions(normalizedHistory)
+  }
+
+  function rememberModelValue(modelValue) {
+    const normalizedValue = modelValue?.trim()
+    if (!normalizedValue || DefaultModelOptions.includes(normalizedValue)) {
+      return
+    }
+
+    persistRecentModelOptions([normalizedValue, ...recentModelOptions])
   }
 
   function setSystemInstructionValue(value) {
@@ -343,6 +390,7 @@ export function TranslatorApplication() {
 
   async function testOllamaConnection() {
     const baseUrl = (baseUrlValue?.trim() || DefaultOllamaBaseUrl).replace(/\/+$/, "")
+    rememberModelValue(model)
     setIsTestingConnection(true)
     setConnectionTestState("testing")
     setConnectionTestMessage(`Testing ${baseUrl} ...`)
@@ -375,6 +423,7 @@ export function TranslatorApplication() {
 
   async function generate(e) {
     e.preventDefault()
+    rememberModelValue(model)
     setTranslatorRunningState(true)
     console.log("[User Interface]", "Begin Generation")
     translatorRunningRef.current = true
@@ -483,6 +532,7 @@ export function TranslatorApplication() {
     ? translatedExportFileName
     : mergeSecondarySubtitle?.name ?? "Choose the bottom subtitle"
   const canMergeSubtitles = Boolean(mergePrimarySubtitle?.text && mergeSecondarySubtitle?.text)
+  const modelOptions = [...DefaultModelOptions, ...recentModelOptions]
 
   return (
     <>
@@ -550,7 +600,7 @@ export function TranslatorApplication() {
                           <p><a className="text-primary underline" href="https://docs.ollama.com/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a></p>
                           <p><a className="text-primary underline" href="https://docs.ollama.com/api/openai-compatibility" target="_blank" rel="noopener noreferrer">OpenAI compatibility</a></p>
                           <p><a className="text-primary underline" href="https://docs.ollama.com/faq" target="_blank" rel="noopener noreferrer">OLLAMA_ORIGINS / FAQ</a></p>
-                          <p><a className="text-primary underline" href="https://ollama.com/library/gemma3" target="_blank" rel="noopener noreferrer">Gemma 3 models</a></p>
+                          <p><a className="text-primary underline" href="https://ollama.com/library" target="_blank" rel="noopener noreferrer">Ollama model library</a></p>
                         </div>
                       </CardBody>
                     </Card>
@@ -734,15 +784,28 @@ export function TranslatorApplication() {
 
                   <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
                     <div className='w-full md:w-1/5'>
-                      <Input
+                      <Autocomplete
                         size='sm'
-                        type="text"
                         label="Model"
                         placeholder={DefaultModel}
-                        autoComplete='on'
-                        value={model}
-                        onValueChange={setModelValue}
-                      />
+                        inputValue={model}
+                        selectedKey={modelOptions.includes(model) ? model : null}
+                        onInputChange={setModelValue}
+                        onSelectionChange={(value) => {
+                          if (typeof value === "string") {
+                            setModelValue(value)
+                            rememberModelValue(value)
+                          }
+                        }}
+                        menuTrigger="focus"
+                        allowsCustomValue
+                      >
+                        {modelOptions.map((modelOption) => (
+                          <AutocompleteItem key={modelOption}>
+                            {modelOption}
+                          </AutocompleteItem>
+                        ))}
+                      </Autocomplete>
                     </div>
 
                     <div className='w-full md:w-1/5 flex'>
