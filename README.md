@@ -33,7 +33,7 @@ This fork adds a GitHub Pages oriented Ollama workflow and several quality-of-li
 ### Ollama and GitHub Pages
 - The web UI is tuned for local Ollama usage from GitHub Pages on the same PC.
 - Default web values are optimized for Ollama:
-  - Model: `translategemma12b-it-q4_K_M`
+  - Model: `translategemma:12b-it-q4_K_M`
   - Structured Mode: off
   - Temperature: `0`
 - The page includes a detailed first-run Ollama guide for Windows, including:

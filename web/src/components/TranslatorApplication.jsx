@@ -25,7 +25,7 @@ const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
 const PreviousDefaultModel = "gpt-4o-mini"
-const DefaultModel = "translategemma12b-it-q4_K_M"
+const DefaultModel = "translategemma:12b-it-q4_K_M"
 const SecondaryDefaultModel = "gemma3:12b-it-qat"
 const DefaultModelOptions = [DefaultModel, SecondaryDefaultModel]
 const DefaultTemperature = 0
