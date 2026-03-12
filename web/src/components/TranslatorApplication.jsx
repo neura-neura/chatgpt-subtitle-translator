@@ -18,7 +18,8 @@ const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
 const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 
-const DefaultModel = "gpt-4o-mini"
+const PreviousDefaultModel = "gpt-4o-mini"
+const DefaultModel = "gemma3:12b-it-qat"
 const DefaultTemperature = 0
 const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
 
@@ -32,7 +33,7 @@ export function TranslatorApplication() {
   const [model, setModel] = useState(DefaultModel)
   const [temperature, setTemperature] = useState(DefaultTemperature)
   const [batchSizes, setBatchSizes] = useState([10, 50])
-  const [useStructuredMode, setUseStructuredMode] = useState(true)
+  const [useStructuredMode, setUseStructuredMode] = useState(false)
   const [rateLimit, setRateLimit] = useState(60)
 
   const [isAPIInputVisible, setIsAPIInputVisible] = useState(false)
@@ -60,7 +61,8 @@ export function TranslatorApplication() {
     setAPIValue(localStorage.getItem(OPENAI_API_KEY) ?? "")
     setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
     setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
-    setModelValue(localStorage.getItem(MODEL) ?? DefaultModel)
+    const storedModel = localStorage.getItem(MODEL)
+    setModelValue(!storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel)
     setSiteOrigin(window.location.origin)
     setHideOllamaPagesHint(localStorage.getItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED) === "true")
   }, [])
@@ -255,17 +257,39 @@ export function TranslatorApplication() {
                           <p><b>Use these values in this page</b></p>
                           <p>API Key: <code>ollama</code></p>
                           <p>Base URL: <code>{DefaultOllamaBaseUrl}</code></p>
+                          <p>Model: <code>{DefaultModel}</code></p>
                           <p>Structured Mode: <code>off</code></p>
                         </div>
 
                         <div className="grid gap-1">
-                          <p><b>How to allow this site in Windows</b></p>
-                          <p>1. Close Ollama from the Windows system tray.</p>
-                          <p>2. Open the Start menu and search for <code>environment variables</code>.</p>
-                          <p>3. Open <code>Edit environment variables for your account</code>.</p>
-                          <p>4. Create or edit <code>OLLAMA_ORIGINS</code>.</p>
-                          <p>5. Set it to <code>{siteOrigin}</code>.</p>
-                          <p>6. Start Ollama again.</p>
+                          <p><b>First-time setup on a new Windows PC</b></p>
+                          <p>1. Install Ollama for Windows from <a className="text-primary underline" href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">ollama.com/download/windows</a>.</p>
+                          <p>2. Open PowerShell and verify the install with <code>ollama --version</code>.</p>
+                          <p>3. Download the model with <code>ollama pull {DefaultModel}</code>.</p>
+                          <p>4. Optional quick test: <code>ollama run {DefaultModel} "Translate this to Spanish: Hello world"</code>.</p>
+                          <p>5. If Ollama is not running, start it from the Start menu, or run <code>ollama serve</code>.</p>
+                          <p>6. Close Ollama from the Windows system tray before changing environment variables.</p>
+                          <p>7. Open the Start menu, search for <code>environment variables</code>, and open <code>Edit environment variables for your account</code>.</p>
+                          <p>8. Create or edit <code>OLLAMA_ORIGINS</code> and set it to <code>{siteOrigin}</code>.</p>
+                          <p>9. Start Ollama again from the Start menu.</p>
+                          <p>10. Come back to this page and enter the values shown above, then click <code>Import SRT</code>, <code>Start</code>, and finally <code>Export SRT</code>.</p>
+                        </div>
+
+                        <div className="grid gap-1">
+                          <p><b>Copy these PowerShell commands</b></p>
+                          <pre className="overflow-x-auto rounded-medium bg-content2 p-3 text-xs">
+{`ollama --version
+ollama pull ${DefaultModel}
+ollama run ${DefaultModel} "Translate this to Spanish: Hello world"`}
+                          </pre>
+                        </div>
+
+                        <div className="grid gap-1">
+                          <p><b>Official references</b></p>
+                          <p><a className="text-primary underline" href="https://docs.ollama.com/windows" target="_blank" rel="noopener noreferrer">Ollama for Windows</a></p>
+                          <p><a className="text-primary underline" href="https://docs.ollama.com/api/openai-compatibility" target="_blank" rel="noopener noreferrer">OpenAI compatibility</a></p>
+                          <p><a className="text-primary underline" href="https://docs.ollama.com/faq" target="_blank" rel="noopener noreferrer">OLLAMA_ORIGINS / FAQ</a></p>
+                          <p><a className="text-primary underline" href="https://ollama.com/library/gemma3" target="_blank" rel="noopener noreferrer">Gemma 3 models</a></p>
                         </div>
                       </CardBody>
                     </Card>
