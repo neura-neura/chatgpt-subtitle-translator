@@ -18,6 +18,8 @@ const OPENAI_BASE_URL = "OPENAI_BASE_URL"
 const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
 const TO_LANGUAGE = "TO_LANGUAGE"
+const SYSTEM_INSTRUCTION = "SYSTEM_INSTRUCTION"
+const KEEP_MERGE_LANGUAGE_TAG = "KEEP_MERGE_LANGUAGE_TAG"
 const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
@@ -73,7 +75,7 @@ export function TranslatorApplication() {
   const [importedSubtitleFileName, setImportedSubtitleFileName] = useState("")
   const [mergePrimarySubtitle, setMergePrimarySubtitle] = useState(null)
   const [mergeSecondarySubtitle, setMergeSecondarySubtitle] = useState(null)
-  const [keepMergeLanguageTag, setKeepMergeLanguageTag] = useState(true)
+  const [keepMergeLanguageTag, setKeepMergeLanguageTag] = useState(false)
   const [mergeStatusMessage, setMergeStatusMessage] = useState("")
   const [translatorRunningState, setTranslatorRunningState] = useState(false)
   /** @type {React.RefObject<Translator>} */
@@ -95,6 +97,8 @@ export function TranslatorApplication() {
     setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
     setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
     setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
+    setSystemInstruction(localStorage.getItem(SYSTEM_INSTRUCTION) ?? "")
+    setKeepMergeLanguageTag(localStorage.getItem(KEEP_MERGE_LANGUAGE_TAG) === "true")
     const storedModel = localStorage.getItem(MODEL)
     setModelValue(!storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel)
     setSiteOrigin(window.location.origin)
@@ -170,6 +174,21 @@ export function TranslatorApplication() {
       localStorage.setItem(TO_LANGUAGE, value)
     }
     setToLanguage(value)
+  }
+
+  function setSystemInstructionValue(value) {
+    if (value === "") {
+      localStorage.removeItem(SYSTEM_INSTRUCTION)
+    }
+    else {
+      localStorage.setItem(SYSTEM_INSTRUCTION, value)
+    }
+    setSystemInstruction(value)
+  }
+
+  function setKeepMergeLanguageTagValue(value) {
+    localStorage.setItem(KEEP_MERGE_LANGUAGE_TAG, String(value))
+    setKeepMergeLanguageTag(value)
   }
 
   /**
@@ -255,7 +274,7 @@ export function TranslatorApplication() {
     const combinedSubtitles = combineSubtitles(primary.subtitles, secondary.subtitles, primary.format, "{\\rENG}", true)
     const combinedFileName = keepMergeLanguageTag
       ? buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage)
-      : appendFileNameSuffix(buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage), "sin_rENG")
+      : appendFileNameSuffix(buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage), "no_rENG")
     const combinedSrtText = keepMergeLanguageTag
       ? buildCombinedSrtText(combinedSubtitles)
       : removeREngTag(buildCombinedSrtText(combinedSubtitles))
@@ -305,7 +324,7 @@ export function TranslatorApplication() {
   }
 
   function applySystemInstructionPreset(preset) {
-    setSystemInstruction(preset.text?.trim() || preset.description?.trim() || "")
+    setSystemInstructionValue(preset.text?.trim() || preset.description?.trim() || "")
   }
 
   function deleteSystemInstructionPreset(presetId) {
@@ -458,7 +477,7 @@ export function TranslatorApplication() {
   const baseCombinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || importedSubtitleFileName, fromLanguage, toLanguage)
   const combinedExportFileName = keepMergeLanguageTag
     ? baseCombinedExportFileName
-    : appendFileNameSuffix(baseCombinedExportFileName, "sin_rENG")
+    : appendFileNameSuffix(baseCombinedExportFileName, "no_rENG")
   const mergePrimaryLabel = mergePrimarySubtitle?.name ?? "Choose the top subtitle"
   const mergeSecondaryLabel = mergeSecondarySubtitle?.source === "generated"
     ? translatedExportFileName
@@ -624,7 +643,7 @@ export function TranslatorApplication() {
                       description={"Override preset system instruction. Save stores this exact text."}
                       placeholder={`Translate ${fromLanguage ? fromLanguage + " " : ""}to ${toLanguage}`}
                       value={systemInstruction}
-                      onValueChange={setSystemInstruction}
+                      onValueChange={setSystemInstructionValue}
                     />
                   </div>
 
@@ -831,83 +850,88 @@ export function TranslatorApplication() {
           }}>
             Export SRT
           </Button>
-          <div className='flex items-stretch overflow-hidden rounded-2xl shadow-sm ring-1 ring-secondary/20'>
-            <Button
-              color="secondary"
-              className='rounded-r-none rounded-l-2xl px-5 font-semibold'
-              onClick={combineAndDownloadSubtitles}
-              isDisabled={!canMergeSubtitles}
-            >
-              Merge Bilingual
-            </Button>
-            <Popover placement="bottom-end">
-              <PopoverTrigger>
-                <Button
-                  color="secondary"
-                  className='rounded-l-none rounded-r-2xl min-w-11 w-11 border-l border-white/20 bg-secondary-600'
-                  isIconOnly
-                  aria-label="Open bilingual merge options"
-                >
-                  <ChevronDownIcon />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent>
-                <div className='w-80 p-3 flex flex-col gap-3'>
-                  <div>
-                    <p className='text-sm font-semibold'>Merge top and bottom subtitles</p>
-                    <p className='text-xs text-default-500'>
-                      The current import is used as the top subtitle and the latest translated SRT is used as the bottom subtitle by default.
-                      You can replace either one here with files from your computer.
-                    </p>
-                  </div>
-
-                  <div className='grid gap-2'>
+          <div className='flex flex-col items-start'>
+            <div className='flex items-stretch overflow-hidden rounded-2xl shadow-sm ring-1 ring-secondary/20'>
+              <Button
+                color="secondary"
+                className='rounded-r-none rounded-l-2xl px-5 font-semibold'
+                onClick={combineAndDownloadSubtitles}
+                isDisabled={!canMergeSubtitles}
+              >
+                Merge Bilingual
+              </Button>
+              <Popover placement="bottom-end">
+                <PopoverTrigger>
+                  <Button
+                    color="secondary"
+                    className='rounded-l-none rounded-r-2xl min-w-11 w-11 border-l border-white/20 bg-secondary-600'
+                    isIconOnly
+                    aria-label="Open bilingual merge options"
+                  >
+                    <ChevronDownIcon />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent>
+                  <div className='w-80 p-3 flex flex-col gap-3'>
                     <div>
-                      <p className='text-xs font-semibold text-default-600 mb-1'>Top subtitle</p>
-                      <FileUploadButton
-                        label="Choose Top Subtitle"
-                        accept=".srt,.ass"
-                        inputId="merge-top-subtitle-input"
-                        buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
-                        onFileSelect={(file) => loadMergeSubtitleFile(file, "primary")}
-                      />
-                      <p className='text-xs text-default-500 mt-1 break-all'>{mergePrimaryLabel}</p>
-                    </div>
-
-                    <div>
-                      <p className='text-xs font-semibold text-default-600 mb-1'>Bottom subtitle</p>
-                      <FileUploadButton
-                        label="Choose Bottom Subtitle"
-                        accept=".srt,.ass"
-                        inputId="merge-bottom-subtitle-input"
-                        buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
-                        onFileSelect={(file) => loadMergeSubtitleFile(file, "secondary")}
-                      />
-                      <p className='text-xs text-default-500 mt-1 break-all'>{mergeSecondaryLabel}</p>
-                    </div>
-                  </div>
-
-                  <div className='flex gap-3 rounded-xl bg-default-50 px-3 py-3'>
-                    <Switch
-                      size='sm'
-                      isSelected={keepMergeLanguageTag}
-                      onValueChange={setKeepMergeLanguageTag}
-                    >
-                    </Switch>
-                    <div className='flex flex-col gap-1'>
-                      <p className='text-sm font-semibold'>Keep {"{\\rENG}"} tag</p>
+                      <p className='text-sm font-semibold'>Merge top and bottom subtitles</p>
                       <p className='text-xs text-default-500'>
-                        Turn this off to remove the exact raw string {"{\\rENG}"} from the exported combined SRT, matching your Python cleanup script.
+                        The current import is used as the top subtitle and the latest translated SRT is used as the bottom subtitle by default.
+                        You can replace either one here with files from your computer.
                       </p>
                     </div>
-                  </div>
 
-                  <div className='text-xs text-default-500'>
-                    Combined file name: <code>{combinedExportFileName}</code>
+                    <div className='grid gap-2'>
+                      <div>
+                        <p className='text-xs font-semibold text-default-600 mb-1'>Top subtitle</p>
+                        <FileUploadButton
+                          label="Choose Top Subtitle"
+                          accept=".srt,.ass"
+                          inputId="merge-top-subtitle-input"
+                          buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
+                          onFileSelect={(file) => loadMergeSubtitleFile(file, "primary")}
+                        />
+                        <p className='text-xs text-default-500 mt-1 break-all'>{mergePrimaryLabel}</p>
+                      </div>
+
+                      <div>
+                        <p className='text-xs font-semibold text-default-600 mb-1'>Bottom subtitle</p>
+                        <FileUploadButton
+                          label="Choose Bottom Subtitle"
+                          accept=".srt,.ass"
+                          inputId="merge-bottom-subtitle-input"
+                          buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
+                          onFileSelect={(file) => loadMergeSubtitleFile(file, "secondary")}
+                        />
+                        <p className='text-xs text-default-500 mt-1 break-all'>{mergeSecondaryLabel}</p>
+                      </div>
+                    </div>
+
+                    <div className='flex gap-3 rounded-xl bg-default-50 px-3 py-3'>
+                      <Switch
+                        size='sm'
+                        isSelected={keepMergeLanguageTag}
+                        onValueChange={setKeepMergeLanguageTagValue}
+                      >
+                      </Switch>
+                      <div className='flex flex-col gap-1'>
+                        <p className='text-sm font-semibold'>Keep {"{\\rENG}"} tag</p>
+                        <p className='text-xs text-default-500'>
+                          Turn this off to remove the exact raw string {"{\\rENG}"} from the exported combined SRT, matching your Python cleanup script.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className='text-xs text-default-500'>
+                      Combined file name: <code>{combinedExportFileName}</code>
+                    </div>
                   </div>
-                </div>
-              </PopoverContent>
-            </Popover>
+                </PopoverContent>
+              </Popover>
+            </div>
+            <p className='mt-1 px-1 text-[11px] font-medium text-default-500'>
+              {keepMergeLanguageTag ? 'Current: with {\\rENG}' : 'Current: without {\\rENG}'}
+            </p>
           </div>
           <Divider className='mt-3 sm:mt-0' />
         </div>
