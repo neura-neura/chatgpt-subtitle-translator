@@ -17,6 +17,7 @@ const OPENAI_BASE_URL = "OPENAI_BASE_URL"
 const RATE_LIMIT = "RATE_LIMIT"
 const MODEL = "MODEL"
 const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
+const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
 const PreviousDefaultModel = "gpt-4o-mini"
 const DefaultModel = "gemma3:12b-it-qat"
@@ -35,6 +36,10 @@ export function TranslatorApplication() {
   const [batchSizes, setBatchSizes] = useState([10, 50])
   const [useStructuredMode, setUseStructuredMode] = useState(false)
   const [rateLimit, setRateLimit] = useState(60)
+  const [systemInstructionTitle, setSystemInstructionTitle] = useState("")
+  const [systemInstructionDescription, setSystemInstructionDescription] = useState("")
+  const [savedSystemInstructions, setSavedSystemInstructions] = useState([])
+  const [selectedSystemInstructionId, setSelectedSystemInstructionId] = useState("")
 
   const [isAPIInputVisible, setIsAPIInputVisible] = useState(false)
   const toggleAPIInputVisibility = () => setIsAPIInputVisible(!isAPIInputVisible)
@@ -55,6 +60,9 @@ export function TranslatorApplication() {
   const [RPMInfomation, setRPMInformation] = useState(0)
   const [siteOrigin, setSiteOrigin] = useState("")
   const [hideOllamaPagesHint, setHideOllamaPagesHint] = useState(false)
+  const [connectionTestMessage, setConnectionTestMessage] = useState("")
+  const [connectionTestState, setConnectionTestState] = useState("idle")
+  const [isTestingConnection, setIsTestingConnection] = useState(false)
 
   // Persistent Data Restoration
   useEffect(() => {
@@ -65,6 +73,11 @@ export function TranslatorApplication() {
     setModelValue(!storedModel || storedModel === PreviousDefaultModel ? DefaultModel : storedModel)
     setSiteOrigin(window.location.origin)
     setHideOllamaPagesHint(localStorage.getItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED) === "true")
+    try {
+      setSavedSystemInstructions(JSON.parse(localStorage.getItem(SYSTEM_INSTRUCTION_PRESETS) ?? "[]"))
+    } catch {
+      setSavedSystemInstructions([])
+    }
   }, [])
 
   const isGitHubPages = siteOrigin.includes("github.io")
@@ -117,6 +130,54 @@ export function TranslatorApplication() {
     setModel(value)
   }
 
+  function persistSystemInstructionPresets(presets) {
+    localStorage.setItem(SYSTEM_INSTRUCTION_PRESETS, JSON.stringify(presets))
+    setSavedSystemInstructions(presets)
+  }
+
+  function clearSystemInstructionPresetForm() {
+    setSelectedSystemInstructionId("")
+    setSystemInstructionTitle("")
+    setSystemInstructionDescription("")
+  }
+
+  function saveSystemInstructionPreset() {
+    if (!systemInstruction.trim() || !systemInstructionTitle.trim() || !systemInstructionDescription.trim()) {
+      return
+    }
+
+    const presetId = selectedSystemInstructionId || crypto.randomUUID()
+    const nextPreset = {
+      id: presetId,
+      title: systemInstructionTitle.trim(),
+      description: systemInstructionDescription.trim(),
+      text: systemInstruction.trim()
+    }
+
+    const nextPresets = selectedSystemInstructionId
+      ? savedSystemInstructions.map(preset => preset.id === presetId ? nextPreset : preset)
+      : [nextPreset, ...savedSystemInstructions]
+
+    persistSystemInstructionPresets(nextPresets)
+    setSelectedSystemInstructionId(presetId)
+  }
+
+  function applySystemInstructionPreset(preset) {
+    setSelectedSystemInstructionId(preset.id)
+    setSystemInstructionTitle(preset.title)
+    setSystemInstructionDescription(preset.description)
+    setSystemInstruction(preset.text)
+  }
+
+  function deleteSystemInstructionPreset(presetId) {
+    const nextPresets = savedSystemInstructions.filter(preset => preset.id !== presetId)
+    persistSystemInstructionPresets(nextPresets)
+
+    if (selectedSystemInstructionId === presetId) {
+      clearSystemInstructionPresetForm()
+    }
+  }
+
   function closeOllamaPagesHint() {
     setHideOllamaPagesHint(true)
   }
@@ -124,6 +185,38 @@ export function TranslatorApplication() {
   function dismissOllamaPagesHintForever() {
     localStorage.setItem(OLLAMA_GITHUB_PAGES_HINT_DISMISSED, "true")
     setHideOllamaPagesHint(true)
+  }
+
+  async function testOllamaConnection() {
+    const baseUrl = (baseUrlValue?.trim() || DefaultOllamaBaseUrl).replace(/\/+$/, "")
+    setIsTestingConnection(true)
+    setConnectionTestState("testing")
+    setConnectionTestMessage(`Testing ${baseUrl} ...`)
+
+    try {
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: APIvalue ? { Authorization: `Bearer ${APIvalue}` } : undefined,
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message ?? data?.message ?? `HTTP ${response.status}`)
+      }
+
+      const models = Array.isArray(data?.data) ? data.data : []
+      const hasSelectedModel = models.some(item => item?.id === model)
+      setConnectionTestState("success")
+      setConnectionTestMessage(
+        hasSelectedModel
+          ? `Connected. ${model} is available in Ollama.`
+          : `Connected. Ollama responded and exposed ${models.length} model(s).`
+      )
+    } catch (error) {
+      setConnectionTestState("error")
+      setConnectionTestMessage(error?.message ?? String(error))
+    } finally {
+      setIsTestingConnection(false)
+    }
   }
 
   async function generate(e) {
@@ -263,25 +356,21 @@ export function TranslatorApplication() {
 
                         <div className="grid gap-1">
                           <p><b>First-time setup on a new Windows PC</b></p>
-                          <p>1. Install Ollama for Windows from <a className="text-primary underline" href="https://ollama.com/download/windows" target="_blank" rel="noopener noreferrer">ollama.com/download/windows</a>.</p>
-                          <p>2. Open PowerShell and verify the install with <code>ollama --version</code>.</p>
-                          <p>3. Download the model with <code>ollama pull {DefaultModel}</code>.</p>
-                          <p>4. Optional quick test: <code>ollama run {DefaultModel} "Translate this to Spanish: Hello world"</code>.</p>
-                          <p>5. If Ollama is not running, start it from the Start menu, or run <code>ollama serve</code>.</p>
-                          <p>6. Close Ollama from the Windows system tray before changing environment variables.</p>
-                          <p>7. Open the Start menu, search for <code>environment variables</code>, and open <code>Edit environment variables for your account</code>.</p>
-                          <p>8. Create or edit <code>OLLAMA_ORIGINS</code> and set it to <code>{siteOrigin}</code>.</p>
-                          <p>9. Start Ollama again from the Start menu.</p>
-                          <p>10. Come back to this page and enter the values shown above, then click <code>Import SRT</code>, <code>Start</code>, and finally <code>Export SRT</code>.</p>
-                        </div>
-
-                        <div className="grid gap-1">
-                          <p><b>Copy these PowerShell commands</b></p>
-                          <pre className="overflow-x-auto rounded-medium bg-content2 p-3 text-xs">
-{`ollama --version
-ollama pull ${DefaultModel}
-ollama run ${DefaultModel} "Translate this to Spanish: Hello world"`}
-                          </pre>
+                          <p>1. Install Ollama with PowerShell: <code>irm https://ollama.com/install.ps1 | iex</code></p>
+                          <p>2. Or install Ollama from cmd: <code>curl.exe -L https://registry.ollama.com/download/OllamaSetup.exe -o %TEMP%\OllamaSetup.exe && start /wait "" %TEMP%\OllamaSetup.exe</code></p>
+                          <p>3. Verify the install: <code>ollama --version</code></p>
+                          <p>4. Download the model: <code>ollama pull {DefaultModel}</code></p>
+                          <p>5. Optional quick test: <code>ollama run {DefaultModel} "Translate this to Spanish: Hello world"</code></p>
+                          <p>6. If Ollama is not running, start it in PowerShell: <code>Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>7. Or start it from cmd: <code>start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>8. Before changing environment variables, close Ollama in PowerShell: <code>Stop-Process -Name "ollama","ollama app" -Force -ErrorAction SilentlyContinue</code></p>
+                          <p>9. Or close it from cmd: <code>taskkill /IM "ollama.exe" /F &amp; taskkill /IM "ollama app.exe" /F</code></p>
+                          <p>10. Set the environment variable in PowerShell: <code>setx OLLAMA_ORIGINS "{siteOrigin}"</code></p>
+                          <p>11. Or set it from cmd: <code>setx OLLAMA_ORIGINS "{siteOrigin}"</code></p>
+                          <p>12. Start Ollama again in PowerShell: <code>Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>13. Or start it from cmd: <code>start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>14. Back on this page, enter the values shown above and click <code>Test Ollama Connection</code>.</p>
+                          <p>15. When the test passes, click <code>Import SRT</code>, then <code>Start</code>, and finally <code>Export SRT</code>.</p>
                         </div>
 
                         <div className="grid gap-1">
@@ -336,6 +425,23 @@ ollama run ${DefaultModel} "Translate this to Spanish: Hello world"`}
                     </p>
                   )}
 
+                  <div className='flex flex-wrap items-center gap-3 w-full'>
+                    <Button
+                      type='button'
+                      color="secondary"
+                      variant="flat"
+                      onClick={testOllamaConnection}
+                      isLoading={isTestingConnection}
+                    >
+                      Test Ollama Connection
+                    </Button>
+                    {connectionTestMessage && (
+                      <p className={`text-sm ${connectionTestState === "error" ? "text-danger" : connectionTestState === "success" ? "text-success" : "text-default-500"}`}>
+                        {connectionTestMessage}
+                      </p>
+                    )}
+                  </div>
+
                   <div className='flex w-full gap-4'>
                     <Input
                       className='w-full md:w-6/12'
@@ -368,6 +474,72 @@ ollama run ${DefaultModel} "Translate this to Spanish: Hello world"`}
                       onValueChange={setSystemInstruction}
                     />
                   </div>
+
+                  <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
+                    <Input
+                      className='w-full md:w-4/12'
+                      size='sm'
+                      type="text"
+                      label="Instruction Title"
+                      placeholder="Anime JP -> ES"
+                      value={systemInstructionTitle}
+                      onValueChange={setSystemInstructionTitle}
+                    />
+                    <Input
+                      className='w-full md:w-5/12'
+                      size='sm'
+                      type="text"
+                      label="Instruction Description"
+                      placeholder="Keep honorifics, concise subtitles, natural Spanish"
+                      value={systemInstructionDescription}
+                      onValueChange={setSystemInstructionDescription}
+                    />
+                    <div className='w-full md:w-3/12 flex items-end gap-2'>
+                      <Button
+                        className='w-full'
+                        type='button'
+                        color="primary"
+                        variant="flat"
+                        onClick={saveSystemInstructionPreset}
+                        isDisabled={!systemInstruction.trim() || !systemInstructionTitle.trim() || !systemInstructionDescription.trim()}
+                      >
+                        Save Instruction
+                      </Button>
+                      <Button
+                        type='button'
+                        variant="light"
+                        onClick={clearSystemInstructionPresetForm}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+
+                  {savedSystemInstructions.length > 0 && (
+                    <div className='w-full'>
+                      <p className='text-sm font-semibold mb-2'>Saved System Instructions</p>
+                      <div className='grid gap-3'>
+                        {savedSystemInstructions.map((preset) => (
+                          <Card key={preset.id} shadow="sm" className={`border ${selectedSystemInstructionId === preset.id ? 'border-primary' : ''}`}>
+                            <CardBody className="flex flex-wrap md:flex-nowrap items-start justify-between gap-3">
+                              <div className='flex-1'>
+                                <p className='font-semibold'>{preset.title}</p>
+                                <p className='text-sm text-default-500'>{preset.description}</p>
+                              </div>
+                              <div className='flex gap-2'>
+                                <Button type='button' size='sm' color="primary" variant="flat" onClick={() => applySystemInstructionPreset(preset)}>
+                                  Use
+                                </Button>
+                                <Button type='button' size='sm' color="danger" variant="light" onClick={() => deleteSystemInstructionPreset(preset.id)}>
+                                  Delete
+                                </Button>
+                              </div>
+                            </CardBody>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
                     <div className='w-full md:w-1/5'>
