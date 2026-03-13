@@ -7,6 +7,46 @@ import { TranslationOutput } from './translatorOutput.mjs';
 
 export { DefaultOptions }
 
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function buildFlexibleSourcePattern(source) {
+    return `${source ?? ""}`
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(escapeRegExp)
+        .join("\\s+")
+}
+
+/**
+ * @param {string} line
+ * @param {string} [originalSource]
+ */
+export function sanitizeTranslatedLine(line, originalSource = "") {
+    let cleaned = `${line ?? ""}`.trim()
+    cleaned = cleaned.replace(/^\[Flagged\]\[(?:Model|Moderator)\]\s*/iu, "").trim()
+
+    const sourcePattern = buildFlexibleSourcePattern(originalSource)
+    if (!sourcePattern) {
+        return cleaned
+    }
+
+    const echoedSourcePattern = new RegExp(
+        `^(?:["'“”‘’「【\\(\\[]\\s*)?${sourcePattern}(?:\\s*["'“”‘’」】\\)\\]])?\\s*->\\s*`,
+        "u"
+    )
+
+    if (echoedSourcePattern.test(cleaned)) {
+        cleaned = cleaned.replace(echoedSourcePattern, "").trim()
+    }
+
+    return cleaned
+}
+
 /**
  * @typedef {import('./translatorBase.mjs').TranslationServiceContext} TranslationServiceContext
  * @typedef {import('./translatorBase.mjs').TranslatorOptions} TranslatorOptions
@@ -250,17 +290,17 @@ export class Translator extends TranslatorBase {
             }
             else if (this.options.prefixNumber) {
                 const splits = this.postprocessNumberPrefixedLine(finalTransform)
-                finalTransform = splits.text
-                outTransform = splits.text
+                finalTransform = sanitizeTranslatedLine(splits.text, originalSource)
+                outTransform = finalTransform
                 const expectedLabel = workingIndex + 1
                 if (expectedLabel !== splits.number) {
                     log.warn("[Translator]", "Label mismatch", expectedLabel, splits.number)
                     this.moderatorFlags.set(workingIndex, { remarks: "Label Mismatch", outIndex: splits.number })
-                    finalTransform = `[Flagged][Model] ${originalSource} -> ${finalTransform}`
                 }
             }
             else {
-                finalTransform = this.postprocessLine(finalTransform)
+                finalTransform = sanitizeTranslatedLine(this.postprocessLine(finalTransform), originalSource)
+                outTransform = finalTransform
             }
             this.workingProgress.push({ source: promptSource, transform: promptTransform, completionTokens: completionTokensPerEntry })
             const output = { index: this.workingProgress.length, source: originalSource, transform: outTransform, finalTransform }
@@ -296,7 +336,7 @@ export class Translator extends TranslatorBase {
     postprocessLine(line) {
         line = line.replaceAll(" \\N ", "\n")
         line = line.replaceAll("\\N", "\n")
-        return line
+        return sanitizeTranslatedLine(line)
     }
 
     buildContext() {

@@ -57,6 +57,40 @@ function normalizeSubtitleEditorLineBreaks(text) {
     .replace(/\\n/g, "\n")
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function buildFlexibleSourcePattern(source) {
+  return normalizeSubtitleEditorLineBreaks(source)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(escapeRegExp)
+    .join("\\s+")
+}
+
+function sanitizeTranslatedSubtitleLine(line, originalSource = "") {
+  let cleaned = normalizeSubtitleEditorLineBreaks(line).trim()
+  cleaned = cleaned.replace(/^\[Flagged\]\[(?:Model|Moderator)\]\s*/iu, "").trim()
+
+  const sourcePattern = buildFlexibleSourcePattern(originalSource)
+  if (!sourcePattern) {
+    return cleaned
+  }
+
+  const echoedSourcePattern = new RegExp(
+    `^(?:["'“”‘’「【\\(\\[]\\s*)?${sourcePattern}(?:\\s*["'“”‘’」】\\)\\]])?\\s*->\\s*`,
+    "u"
+  )
+
+  if (echoedSourcePattern.test(cleaned)) {
+    return cleaned.replace(echoedSourcePattern, "").trim()
+  }
+
+  return cleaned
+}
+
 function splitSubtitleTextForEditor(text) {
   const normalizedText = normalizeSubtitleEditorLineBreaks(text)
   return {
@@ -775,9 +809,10 @@ export function TranslatorApplication() {
           console.error("[User Interface]", "Aborted")
           break
         }
-        currentOutputs.push(output.finalTransform)
         const srtEntry = outputWorkingProgress[output.index - 1]
-        srtEntry.text = output.finalTransform
+        const cleanedTransform = sanitizeTranslatedSubtitleLine(output.finalTransform, srtEntry?.text ?? "")
+        currentOutputs.push(cleanedTransform)
+        srtEntry.text = cleanedTransform
         setOutput([...currentOutputs])
         setUsageInformation(translatorRef.current.usage)
         setRPMInformation(translatorRef.current.services.cooler?.rate)
