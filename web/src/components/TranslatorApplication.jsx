@@ -599,10 +599,11 @@ export function TranslatorApplication() {
                           <p>9. Or close it from cmd: <code>taskkill /IM "ollama.exe" /F &amp; taskkill /IM "ollama app.exe" /F</code></p>
                           <p>10. Set the environment variable in PowerShell: <code>setx OLLAMA_ORIGINS "{siteOrigin}"</code></p>
                           <p>11. Or set it from cmd: <code>setx OLLAMA_ORIGINS "{siteOrigin}"</code></p>
-                          <p>12. Start Ollama again in PowerShell: <code>Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"</code></p>
-                          <p>13. Or start it from cmd: <code>start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"</code></p>
-                          <p>14. Back on this page, enter the values shown above and click <code>Test Ollama Connection</code>.</p>
-                          <p>15. When the test passes, click <code>Import SRT</code>, then <code>Start</code>, and finally <code>Export SRT</code>.</p>
+                          <p>12. After <code>setx</code>, close that console and open a new one before running <code>ollama serve</code>. If you use the Ollama app, close it completely and open it again.</p>
+                          <p>13. Start Ollama again in PowerShell: <code>Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>14. Or start it from cmd: <code>start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"</code></p>
+                          <p>15. Back on this page, enter the values shown above and click <code>Test Ollama Connection</code>.</p>
+                          <p>16. When the test passes, click <code>Import SRT</code>, then <code>Start</code>, and finally <code>Export SRT</code>.</p>
                         </div>
 
                         <div className="grid gap-1">
