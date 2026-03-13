@@ -73,6 +73,8 @@ export function TranslatorApplication() {
   // Translator State
   const [srtInputText, setSrtInputText] = useState(sampleSrt)
   const [srtOutputText, setSrtOutputText] = useState(sampleSrt)
+  const [inputEditorText, setInputEditorText] = useState(sampleSrt)
+  const [outputEditorText, setOutputEditorText] = useState(sampleSrt)
   const [inputs, setInputs] = useState(subtitleParser.fromSrt(sampleSrt).map(x => x.text))
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
@@ -299,7 +301,61 @@ export function TranslatorApplication() {
     }
   }
 
+  function applySubtitleEdits() {
+    const hasInputChanges = inputEditorText !== srtInputText
+    const hasOutputChanges = outputEditorText !== srtOutputText
+
+    if (!hasInputChanges && !hasOutputChanges) {
+      return
+    }
+
+    try {
+      if (hasInputChanges) {
+        const parsedInput = inputEditorText.trim() ? subtitleParser.fromSrt(inputEditorText) : []
+        if (inputEditorText.trim() && parsedInput.length === 0) {
+          throw new Error("Input subtitles are not valid SRT. Fix them before applying changes.")
+        }
+
+        setSrtInputText(inputEditorText)
+        setInputs(parsedInput.map(item => item.text))
+
+        if (mergePrimarySubtitle?.source !== "manual") {
+          setMergePrimarySubtitle({
+            name: importedSubtitleFileName || "source.srt",
+            text: inputEditorText,
+            source: "imported",
+          })
+        }
+      }
+
+      if (hasOutputChanges) {
+        const parsedOutput = outputEditorText.trim() ? subtitleParser.fromSrt(outputEditorText) : []
+        if (outputEditorText.trim() && parsedOutput.length === 0) {
+          throw new Error("Output subtitles are not valid SRT. Fix them before applying changes.")
+        }
+
+        setSrtOutputText(outputEditorText)
+        setOutput(parsedOutput.map(item => item.text))
+
+        if (mergeSecondarySubtitle?.source !== "manual") {
+          setMergeSecondarySubtitle(outputEditorText.trim() ? {
+            name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
+            text: outputEditorText,
+            source: "generated",
+          } : null)
+        }
+      }
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
   function combineAndDownloadSubtitles() {
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before combining.")
+      return
+    }
+
     if (!mergePrimarySubtitle || !mergeSecondarySubtitle) {
       alert("Choose both subtitle files before combining.")
       return
@@ -433,6 +489,10 @@ export function TranslatorApplication() {
 
   async function generate(e) {
     e.preventDefault()
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before starting the translation.")
+      return
+    }
     rememberModelValue(model)
     setTranslatorRunningState(true)
     console.log("[User Interface]", "Begin Generation")
@@ -509,6 +569,7 @@ export function TranslatorApplication() {
       console.log({ sourceInputWorkingCopy: outputWorkingProgress })
       const translatedSrt = subtitleParser.toSrt(outputWorkingProgress)
       setSrtOutputText(translatedSrt)
+      setOutputEditorText(translatedSrt)
       setMergeSecondarySubtitle({
         name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
         text: translatedSrt,
@@ -543,6 +604,9 @@ export function TranslatorApplication() {
     : mergeSecondarySubtitle?.name ?? "Choose the bottom subtitle"
   const canMergeSubtitles = Boolean(mergePrimarySubtitle?.text && mergeSecondarySubtitle?.text)
   const modelOptions = [...DefaultModelOptions, ...recentModelOptions]
+  const hasPendingInputEdits = inputEditorText !== srtInputText
+  const hasPendingOutputEdits = outputEditorText !== srtOutputText
+  const hasPendingSubtitleEdits = hasPendingInputEdits || hasPendingOutputEdits
 
   return (
     <>
@@ -891,7 +955,10 @@ export function TranslatorApplication() {
               const text = await file.text()
               const parsed = subtitleParser.fromSrt(text)
               setSrtInputText(text)
+              setInputEditorText(text)
               setInputs(parsed.map(x => x.text))
+              setSrtOutputText("")
+              setOutputEditorText("")
               setImportedSubtitleFileName(file.name)
               setMergePrimarySubtitle({
                 name: file.name,
@@ -919,7 +986,10 @@ export function TranslatorApplication() {
           )}
 
           <Button color="primary" onClick={() => {
-            // console.log(srtOutputText)
+            if (hasPendingSubtitleEdits) {
+              alert("Apply subtitle changes before exporting.")
+              return
+            }
             downloadString(srtOutputText, "text/plain", translatedExportFileName)
           }}>
             Export SRT
@@ -1013,36 +1083,42 @@ export function TranslatorApplication() {
         <div className="lg:flex lg:gap-4 px-4 mt-4">
           <div className="lg:w-1/2">
             <SubtitleCard label={"Input"}>
-              <ol className="py-2 list-decimal line-marker ">
-                {inputs.map((line, i) => {
-                  return (
-                    <li key={i} className=''>
-                      <div className='ml-4 truncate'>
-                        {line}
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
+              <div className='flex items-center justify-between px-4 pt-4'>
+                <p className='text-xs text-default-500'>Editable SRT source. Apply changes before translating.</p>
+                {hasPendingInputEdits && (
+                  <p className='text-xs font-semibold text-warning-600'>Pending source changes</p>
+                )}
+              </div>
+              <textarea
+                className='min-h-[32rem] w-full resize-y bg-transparent px-4 py-3 font-mono text-sm outline-none'
+                spellCheck={false}
+                value={inputEditorText}
+                onChange={(event) => setInputEditorText(event.target.value)}
+                disabled={translatorRunningState}
+              />
             </SubtitleCard>
           </div>
 
           <div className="lg:w-1/2">
             <SubtitleCard label={"Output"}>
-              <ol className="py-2 list-decimal line-marker ">
-                {outputs.map((line, i) => {
-                  return (
-                    <li key={i} className=''>
-                      <div className='ml-4 truncate'>
-                        {line}
-                      </div>
-                    </li>
-                  )
-                })}
-                <pre className='px-2 text-wrap'>
-                  {streamOutput}
-                </pre>
-              </ol>
+              <div className='flex items-center justify-between px-4 pt-4'>
+                <p className='text-xs text-default-500'>Editable translated SRT. Applied changes are used for export and merge.</p>
+                {hasPendingOutputEdits && (
+                  <p className='text-xs font-semibold text-warning-600'>Pending translation changes</p>
+                )}
+              </div>
+              <textarea
+                className='min-h-[32rem] w-full resize-y bg-transparent px-4 py-3 font-mono text-sm outline-none'
+                spellCheck={false}
+                value={outputEditorText}
+                onChange={(event) => setOutputEditorText(event.target.value)}
+                disabled={translatorRunningState}
+                placeholder="Translated subtitles will appear here."
+              />
+              <pre className='px-4 pb-4 text-wrap text-sm text-default-500'>
+                {streamOutput && "Streaming translation progress:\n"}
+                {streamOutput}
+              </pre>
             </SubtitleCard>
 
             {usageInformation && (
@@ -1082,6 +1158,25 @@ export function TranslatorApplication() {
                 onClick={dismissMergeToast}
               >
                 <CloseIcon />
+              </Button>
+            </CardBody>
+          </Card>
+        </div>
+      )}
+      {hasPendingSubtitleEdits && (
+        <div className='pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4'>
+          <Card shadow="lg" className='pointer-events-auto w-full max-w-2xl border border-warning-200 bg-warning-50'>
+            <CardBody className='flex flex-col gap-3 md:flex-row md:items-center md:justify-between'>
+              <div className='min-w-0 flex-1'>
+                <p className='text-sm font-semibold text-warning-800'>Unsaved subtitle edits</p>
+                <p className='text-sm text-warning-700'>
+                  Apply changes before translating, exporting, or merging.
+                  {hasPendingInputEdits && " Source subtitles were edited."}
+                  {hasPendingOutputEdits && " Translated subtitles were edited."}
+                </p>
+              </div>
+              <Button color="warning" className='shrink-0 text-white' onClick={applySubtitleEdits}>
+                Apply Changes
               </Button>
             </CardBody>
           </Card>
