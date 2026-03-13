@@ -30,6 +30,7 @@ const SecondaryDefaultModel = "gemma3:12b-it-qat"
 const DefaultModelOptions = [DefaultModel, SecondaryDefaultModel]
 const DefaultTemperature = 0
 const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
+const MergeLanguageTag = "{\\rENG}"
 
 function ChevronDownIcon(props) {
   return (
@@ -45,6 +46,200 @@ function CloseIcon(props) {
       <path d="M6 6l12 12" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
       <path d="M18 6l-12 12" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
     </svg>
+  )
+}
+
+function normalizeSubtitleEditorLineBreaks(text) {
+  return `${text ?? ""}`
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\\N/g, "\n")
+    .replace(/\\n/g, "\n")
+}
+
+function splitSubtitleTextForEditor(text) {
+  const normalizedText = normalizeSubtitleEditorLineBreaks(text)
+  return {
+    hasEngTag: normalizedText.includes(MergeLanguageTag),
+    text: normalizedText.split(MergeLanguageTag).join(""),
+  }
+}
+
+function buildSubtitleTextFromEditor(text, hasEngTag) {
+  const normalizedText = normalizeSubtitleEditorLineBreaks(text)
+
+  if (!hasEngTag) {
+    return normalizedText
+  }
+
+  if (!normalizedText) {
+    return MergeLanguageTag
+  }
+
+  const lines = normalizedText.split("\n")
+  if (lines.length === 1) {
+    return `${MergeLanguageTag}${lines[0]}`
+  }
+
+  return `${lines[0]}\n${MergeLanguageTag}${lines.slice(1).join("\n")}`
+}
+
+function buildSubtitleEditorRows(srtText) {
+  if (!srtText?.trim()) {
+    return []
+  }
+
+  return subtitleParser.fromSrt(srtText).map((item) => {
+    const { hasEngTag, text } = splitSubtitleTextForEditor(item.text ?? "")
+
+    return {
+      id: item.id ?? "",
+      startTime: item.startTime ?? "",
+      endTime: item.endTime ?? "",
+      text,
+      hasEngTag,
+    }
+  })
+}
+
+function buildSrtFromSubtitleEditorRows(rows) {
+  if (!rows.length) {
+    return ""
+  }
+
+  return `${rows.map((row, index) => {
+    const subtitleId = `${row.id ?? ""}`.trim() || `${index + 1}`
+    const startTime = `${row.startTime ?? ""}`.trim()
+    const endTime = `${row.endTime ?? ""}`.trim()
+    const subtitleText = buildSubtitleTextFromEditor(row.text ?? "", Boolean(row.hasEngTag))
+
+    return `${subtitleId}\r\n${startTime} --> ${endTime}\r\n${subtitleText}`
+  }).join("\r\n\r\n")}\r\n`
+}
+
+function buildSrtFromParsedSubtitles(subtitles) {
+  if (!subtitles.length) {
+    return ""
+  }
+
+  return `${subtitles.map((subtitle) => (
+    `${subtitle.id}\r\n${subtitle.startTime} --> ${subtitle.endTime}\r\n${normalizeSubtitleEditorLineBreaks(subtitle.text ?? "")}`
+  )).join("\r\n\r\n")}\r\n`
+}
+
+function serializeSubtitleEditorRows(rows) {
+  return JSON.stringify(rows.map((row) => ({
+    id: `${row.id ?? ""}`,
+    startTime: `${row.startTime ?? ""}`,
+    endTime: `${row.endTime ?? ""}`,
+    text: normalizeSubtitleEditorLineBreaks(row.text ?? ""),
+    hasEngTag: Boolean(row.hasEngTag),
+  })))
+}
+
+function updateSubtitleEditorRow(setRows, rowIndex, field, value) {
+  setRows((rows) => rows.map((row, index) => (
+    index === rowIndex
+      ? { ...row, [field]: value }
+      : row
+  )))
+}
+
+function SubtitleEditorTable({
+  description,
+  rows,
+  onRowChange,
+  pendingLabel,
+  disabled,
+}) {
+  return (
+    <>
+      <div className='flex items-center justify-between gap-4 px-4 pt-4'>
+        <div className='flex flex-col gap-1'>
+          <p className='text-xs text-default-500'>{description}</p>
+          <p className='text-[11px] text-default-400'>Literal \n or \N is shown as a real line break in the text column.</p>
+        </div>
+        {pendingLabel && (
+          <p className='shrink-0 text-xs font-semibold text-warning-600'>{pendingLabel}</p>
+        )}
+      </div>
+
+      {rows.length === 0 ? (
+        <div className='px-4 pb-4 pt-3'>
+          <p className='rounded-xl border border-dashed border-default-200 px-4 py-6 text-sm text-default-500'>
+            No subtitles loaded in this panel yet.
+          </p>
+        </div>
+      ) : (
+        <div className='overflow-auto px-4 pb-4 pt-3'>
+          <table className='min-w-full border-separate border-spacing-0'>
+            <thead>
+              <tr className='bg-default-100 text-left text-xs uppercase tracking-wide text-default-500'>
+                <th className='rounded-l-xl border-b border-default-200 px-3 py-2'>#</th>
+                <th className='border-b border-default-200 px-3 py-2'>Start</th>
+                <th className='border-b border-default-200 px-3 py-2'>End</th>
+                <th className='border-b border-default-200 px-3 py-2'>Text</th>
+                <th className='rounded-r-xl border-b border-default-200 px-3 py-2 text-center'>ENG</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={`${index}-${row.id}`} className='align-top'>
+                  <td className='border-b border-default-100 px-2 py-2'>
+                    <input
+                      className='w-16 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      type="text"
+                      value={row.id}
+                      onChange={(event) => onRowChange(index, "id", event.target.value)}
+                      disabled={disabled}
+                    />
+                  </td>
+                  <td className='border-b border-default-100 px-2 py-2'>
+                    <input
+                      className='w-36 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      type="text"
+                      value={row.startTime}
+                      onChange={(event) => onRowChange(index, "startTime", event.target.value)}
+                      disabled={disabled}
+                    />
+                  </td>
+                  <td className='border-b border-default-100 px-2 py-2'>
+                    <input
+                      className='w-36 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      type="text"
+                      value={row.endTime}
+                      onChange={(event) => onRowChange(index, "endTime", event.target.value)}
+                      disabled={disabled}
+                    />
+                  </td>
+                  <td className='border-b border-default-100 px-2 py-2'>
+                    <textarea
+                      className='min-h-[4.5rem] w-full min-w-[20rem] resize-y rounded-lg border border-default-200 bg-content1 px-3 py-2 font-mono text-sm outline-none'
+                      rows={Math.max(2, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)}
+                      value={row.text}
+                      onChange={(event) => onRowChange(index, "text", event.target.value)}
+                      disabled={disabled}
+                      spellCheck={false}
+                    />
+                  </td>
+                  <td className='border-b border-default-100 px-2 py-2 text-center'>
+                    <div className='flex justify-center pt-2'>
+                      <Switch
+                        size='sm'
+                        isSelected={Boolean(row.hasEngTag)}
+                        onValueChange={(value) => onRowChange(index, "hasEngTag", value)}
+                        isDisabled={disabled}
+                      >
+                      </Switch>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -73,8 +268,10 @@ export function TranslatorApplication() {
   // Translator State
   const [srtInputText, setSrtInputText] = useState(sampleSrt)
   const [srtOutputText, setSrtOutputText] = useState(sampleSrt)
-  const [inputEditorText, setInputEditorText] = useState(sampleSrt)
-  const [outputEditorText, setOutputEditorText] = useState(sampleSrt)
+  const [inputAppliedRows, setInputAppliedRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
+  const [inputEditorRows, setInputEditorRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
+  const [outputAppliedRows, setOutputAppliedRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
+  const [outputEditorRows, setOutputEditorRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
   const [inputs, setInputs] = useState(subtitleParser.fromSrt(sampleSrt).map(x => x.text))
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
@@ -302,8 +499,8 @@ export function TranslatorApplication() {
   }
 
   function applySubtitleEdits() {
-    const hasInputChanges = inputEditorText !== srtInputText
-    const hasOutputChanges = outputEditorText !== srtOutputText
+    const hasInputChanges = hasPendingInputEdits
+    const hasOutputChanges = hasPendingOutputEdits
 
     if (!hasInputChanges && !hasOutputChanges) {
       return
@@ -311,36 +508,46 @@ export function TranslatorApplication() {
 
     try {
       if (hasInputChanges) {
-        const parsedInput = inputEditorText.trim() ? subtitleParser.fromSrt(inputEditorText) : []
-        if (inputEditorText.trim() && parsedInput.length === 0) {
+        const inputDraftText = buildSrtFromSubtitleEditorRows(inputEditorRows)
+        const parsedInput = inputDraftText.trim() ? subtitleParser.fromSrt(inputDraftText) : []
+        if (inputEditorRows.length > 0 && parsedInput.length !== inputEditorRows.length) {
           throw new Error("Input subtitles are not valid SRT. Fix them before applying changes.")
         }
+        const normalizedInputText = buildSrtFromParsedSubtitles(parsedInput)
+        const normalizedInputRows = buildSubtitleEditorRows(normalizedInputText)
 
-        setSrtInputText(inputEditorText)
+        setSrtInputText(normalizedInputText)
+        setInputAppliedRows(normalizedInputRows)
+        setInputEditorRows(normalizedInputRows)
         setInputs(parsedInput.map(item => item.text))
 
         if (mergePrimarySubtitle?.source !== "manual") {
           setMergePrimarySubtitle({
             name: importedSubtitleFileName || "source.srt",
-            text: inputEditorText,
+            text: normalizedInputText,
             source: "imported",
           })
         }
       }
 
       if (hasOutputChanges) {
-        const parsedOutput = outputEditorText.trim() ? subtitleParser.fromSrt(outputEditorText) : []
-        if (outputEditorText.trim() && parsedOutput.length === 0) {
+        const outputDraftText = buildSrtFromSubtitleEditorRows(outputEditorRows)
+        const parsedOutput = outputDraftText.trim() ? subtitleParser.fromSrt(outputDraftText) : []
+        if (outputEditorRows.length > 0 && parsedOutput.length !== outputEditorRows.length) {
           throw new Error("Output subtitles are not valid SRT. Fix them before applying changes.")
         }
+        const normalizedOutputText = buildSrtFromParsedSubtitles(parsedOutput)
+        const normalizedOutputRows = buildSubtitleEditorRows(normalizedOutputText)
 
-        setSrtOutputText(outputEditorText)
+        setSrtOutputText(normalizedOutputText)
+        setOutputAppliedRows(normalizedOutputRows)
+        setOutputEditorRows(normalizedOutputRows)
         setOutput(parsedOutput.map(item => item.text))
 
         if (mergeSecondarySubtitle?.source !== "manual") {
-          setMergeSecondarySubtitle(outputEditorText.trim() ? {
+          setMergeSecondarySubtitle(normalizedOutputText.trim() ? {
             name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
-            text: outputEditorText,
+            text: normalizedOutputText,
             source: "generated",
           } : null)
         }
@@ -567,9 +774,11 @@ export function TranslatorApplication() {
         setRPMInformation(translatorRef.current.services.cooler?.rate)
       }
       console.log({ sourceInputWorkingCopy: outputWorkingProgress })
-      const translatedSrt = subtitleParser.toSrt(outputWorkingProgress)
+      const translatedSrt = buildSrtFromParsedSubtitles(outputWorkingProgress)
       setSrtOutputText(translatedSrt)
-      setOutputEditorText(translatedSrt)
+      const nextOutputRows = buildSubtitleEditorRows(translatedSrt)
+      setOutputAppliedRows(nextOutputRows)
+      setOutputEditorRows(nextOutputRows)
       setMergeSecondarySubtitle({
         name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
         text: translatedSrt,
@@ -604,8 +813,8 @@ export function TranslatorApplication() {
     : mergeSecondarySubtitle?.name ?? "Choose the bottom subtitle"
   const canMergeSubtitles = Boolean(mergePrimarySubtitle?.text && mergeSecondarySubtitle?.text)
   const modelOptions = [...DefaultModelOptions, ...recentModelOptions]
-  const hasPendingInputEdits = inputEditorText !== srtInputText
-  const hasPendingOutputEdits = outputEditorText !== srtOutputText
+  const hasPendingInputEdits = serializeSubtitleEditorRows(inputEditorRows) !== serializeSubtitleEditorRows(inputAppliedRows)
+  const hasPendingOutputEdits = serializeSubtitleEditorRows(outputEditorRows) !== serializeSubtitleEditorRows(outputAppliedRows)
   const hasPendingSubtitleEdits = hasPendingInputEdits || hasPendingOutputEdits
 
   return (
@@ -954,11 +1163,14 @@ export function TranslatorApplication() {
             try {
               const text = await file.text()
               const parsed = subtitleParser.fromSrt(text)
+              const nextInputRows = buildSubtitleEditorRows(text)
               setSrtInputText(text)
-              setInputEditorText(text)
+              setInputAppliedRows(nextInputRows)
+              setInputEditorRows(nextInputRows)
               setInputs(parsed.map(x => x.text))
               setSrtOutputText("")
-              setOutputEditorText("")
+              setOutputAppliedRows([])
+              setOutputEditorRows([])
               setImportedSubtitleFileName(file.name)
               setMergePrimarySubtitle({
                 name: file.name,
@@ -1083,37 +1295,24 @@ export function TranslatorApplication() {
         <div className="lg:flex lg:gap-4 px-4 mt-4">
           <div className="lg:w-1/2">
             <SubtitleCard label={"Input"}>
-              <div className='flex items-center justify-between px-4 pt-4'>
-                <p className='text-xs text-default-500'>Editable SRT source. Apply changes before translating.</p>
-                {hasPendingInputEdits && (
-                  <p className='text-xs font-semibold text-warning-600'>Pending source changes</p>
-                )}
-              </div>
-              <textarea
-                className='min-h-[32rem] w-full resize-y bg-transparent px-4 py-3 font-mono text-sm outline-none'
-                spellCheck={false}
-                value={inputEditorText}
-                onChange={(event) => setInputEditorText(event.target.value)}
+              <SubtitleEditorTable
+                description="Editable subtitle rows. Apply changes before translating."
+                rows={inputEditorRows}
+                pendingLabel={hasPendingInputEdits ? "Pending source changes" : ""}
                 disabled={translatorRunningState}
+                onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setInputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
           </div>
 
           <div className="lg:w-1/2">
             <SubtitleCard label={"Output"}>
-              <div className='flex items-center justify-between px-4 pt-4'>
-                <p className='text-xs text-default-500'>Editable translated SRT. Applied changes are used for export and merge.</p>
-                {hasPendingOutputEdits && (
-                  <p className='text-xs font-semibold text-warning-600'>Pending translation changes</p>
-                )}
-              </div>
-              <textarea
-                className='min-h-[32rem] w-full resize-y bg-transparent px-4 py-3 font-mono text-sm outline-none'
-                spellCheck={false}
-                value={outputEditorText}
-                onChange={(event) => setOutputEditorText(event.target.value)}
+              <SubtitleEditorTable
+                description="Editable translated rows. Applied changes are used for export and merge."
+                rows={outputEditorRows}
+                pendingLabel={hasPendingOutputEdits ? "Pending translation changes" : ""}
                 disabled={translatorRunningState}
-                placeholder="Translated subtitles will appear here."
+                onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setOutputEditorRows, rowIndex, field, value)}
               />
               <pre className='px-4 pb-4 text-wrap text-sm text-default-500'>
                 {streamOutput && "Streaming translation progress:\n"}
