@@ -21,6 +21,7 @@ const MODEL_HISTORY = "MODEL_HISTORY"
 const TO_LANGUAGE = "TO_LANGUAGE"
 const SYSTEM_INSTRUCTION = "SYSTEM_INSTRUCTION"
 const KEEP_MERGE_LANGUAGE_TAG = "KEEP_MERGE_LANGUAGE_TAG"
+const LINK_SUBTITLE_SCROLL = "LINK_SUBTITLE_SCROLL"
 const OLLAMA_GITHUB_PAGES_HINT_DISMISSED = "OLLAMA_GITHUB_PAGES_HINT_DISMISSED"
 const SYSTEM_INSTRUCTION_PRESETS = "SYSTEM_INSTRUCTION_PRESETS"
 
@@ -200,20 +201,54 @@ function getSubtitleEditorRowHeight(row) {
 }
 
 function SubtitleEditorTable({
+  tableId,
   description,
   rows,
   onRowChange,
   pendingLabel,
   disabled,
   priorityRenderCount = 0,
+  linkedScrollEnabled = false,
+  linkedScrollAnchor = null,
+  onLinkedScrollAnchorChange,
 }) {
   const containerRef = useRef(null)
+  const suppressLinkedScrollRef = useRef(false)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(640)
   const [searchValue, setSearchValue] = useState("")
   const deferredSearchValue = useDeferredValue(searchValue)
   const rowGap = 10
   const overscan = 500
+
+  const normalizedSearchValue = deferredSearchValue.trim().toLowerCase()
+  const indexedRows = rows.map((row, rowIndex) => ({ row, rowIndex }))
+  const filteredRows = normalizedSearchValue
+    ? indexedRows.filter(({ row }) => {
+      const searchableText = [
+        row.id,
+        row.startTime,
+        row.endTime,
+        normalizeSubtitleEditorLineBreaks(row.text),
+      ].join("\n").toLowerCase()
+      return searchableText.includes(normalizedSearchValue)
+    })
+    : indexedRows
+
+  const rowOffsets = []
+  const rowHeights = []
+  let totalHeight = 0
+
+  for (const { row } of filteredRows) {
+    rowOffsets.push(totalHeight)
+    const rowHeight = getSubtitleEditorRowHeight(row)
+    rowHeights.push(rowHeight)
+    totalHeight += rowHeight + rowGap
+  }
+
+  if (filteredRows.length > 0) {
+    totalHeight -= rowGap
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -227,7 +262,25 @@ function SubtitleEditorTable({
     }
 
     const handleScroll = () => {
-      setScrollTop(container.scrollTop)
+      const nextScrollTop = container.scrollTop
+      setScrollTop(nextScrollTop)
+
+      if (!linkedScrollEnabled || suppressLinkedScrollRef.current || filteredRows.length === 0) {
+        return
+      }
+
+      let anchorFilteredIndex = 0
+      while (
+        anchorFilteredIndex + 1 < filteredRows.length &&
+        rowOffsets[anchorFilteredIndex + 1] <= nextScrollTop
+      ) {
+        anchorFilteredIndex += 1
+      }
+
+      onLinkedScrollAnchorChange?.({
+        rowIndex: filteredRows[anchorFilteredIndex]?.rowIndex ?? 0,
+        sourceTableId: tableId,
+      })
     }
 
     updateViewportMetrics()
@@ -245,7 +298,7 @@ function SubtitleEditorTable({
       window.removeEventListener("resize", updateViewportMetrics)
       resizeObserver?.disconnect()
     }
-  }, [])
+  }, [filteredRows, linkedScrollEnabled, onLinkedScrollAnchorChange, rowOffsets, tableId])
 
   useEffect(() => {
     const container = containerRef.current
@@ -257,35 +310,32 @@ function SubtitleEditorTable({
     setScrollTop(0)
   }, [deferredSearchValue])
 
-  const normalizedSearchValue = deferredSearchValue.trim().toLowerCase()
-  const filteredRows = normalizedSearchValue
-    ? rows
-      .map((row, rowIndex) => ({ row, rowIndex }))
-      .filter(({ row }) => {
-        const searchableText = [
-          row.id,
-          row.startTime,
-          row.endTime,
-          normalizeSubtitleEditorLineBreaks(row.text),
-        ].join("\n").toLowerCase()
-        return searchableText.includes(normalizedSearchValue)
-      })
-    : rows.map((row, rowIndex) => ({ row, rowIndex }))
+  useEffect(() => {
+    if (!linkedScrollEnabled || !linkedScrollAnchor || linkedScrollAnchor.sourceTableId === tableId) {
+      return
+    }
 
-  const rowOffsets = []
-  const rowHeights = []
-  let totalHeight = 0
+    const container = containerRef.current
+    if (!container || filteredRows.length === 0) {
+      return
+    }
 
-  for (const { row } of filteredRows) {
-    rowOffsets.push(totalHeight)
-    const rowHeight = getSubtitleEditorRowHeight(row)
-    rowHeights.push(rowHeight)
-    totalHeight += rowHeight + rowGap
-  }
+    let targetFilteredIndex = filteredRows.findIndex((entry) => entry.rowIndex === linkedScrollAnchor.rowIndex)
+    if (targetFilteredIndex < 0) {
+      targetFilteredIndex = filteredRows.findIndex((entry) => entry.rowIndex > linkedScrollAnchor.rowIndex)
+    }
+    if (targetFilteredIndex < 0) {
+      targetFilteredIndex = filteredRows.length - 1
+    }
 
-  if (filteredRows.length > 0) {
-    totalHeight -= rowGap
-  }
+    const nextScrollTop = rowOffsets[targetFilteredIndex] ?? 0
+    suppressLinkedScrollRef.current = true
+    container.scrollTop = nextScrollTop
+    setScrollTop(nextScrollTop)
+    window.requestAnimationFrame(() => {
+      suppressLinkedScrollRef.current = false
+    })
+  }, [filteredRows, linkedScrollAnchor, linkedScrollEnabled, rowOffsets, tableId])
 
   const minVisibleOffset = Math.max(0, scrollTop - overscan)
   const maxVisibleOffset = scrollTop + viewportHeight + overscan
@@ -307,7 +357,7 @@ function SubtitleEditorTable({
 
   for (let index = 0; index < priorityCount; index += 1) {
     const entry = filteredRows[index]
-    visibleRowMap.set(entry.rowIndex, entry)
+    visibleRowMap.set(entry.rowIndex, { ...entry, filteredIndex: index })
   }
 
   for (let index = visibleStartIndex; index < visibleEndIndex; index += 1) {
@@ -315,7 +365,7 @@ function SubtitleEditorTable({
     if (!entry) {
       continue
     }
-    visibleRowMap.set(entry.rowIndex, entry)
+    visibleRowMap.set(entry.rowIndex, { ...entry, filteredIndex: index })
   }
 
   const visibleRows = Array.from(visibleRowMap.values())
@@ -363,10 +413,9 @@ function SubtitleEditorTable({
           ) : (
             <div ref={containerRef} className='h-[36rem] overflow-y-auto px-2 py-2'>
               <div className='relative' style={{ height: `${Math.max(totalHeight, 1)}px` }}>
-                {visibleRows.map(({ row, rowIndex }, visibleIndex) => {
-                  const virtualRowIndex = visibleStartIndex + visibleIndex
-                  const rowTop = rowOffsets[virtualRowIndex]
-                  const rowHeight = rowHeights[virtualRowIndex]
+                {visibleRows.map(({ row, rowIndex, filteredIndex }) => {
+                  const rowTop = rowOffsets[filteredIndex]
+                  const rowHeight = rowHeights[filteredIndex]
 
                   return (
                     <div
@@ -481,6 +530,8 @@ export function TranslatorApplication() {
   const [connectionTestState, setConnectionTestState] = useState("idle")
   const [isTestingConnection, setIsTestingConnection] = useState(false)
   const [showTranslationProgressPanel, setShowTranslationProgressPanel] = useState(false)
+  const [linkSubtitleScroll, setLinkSubtitleScroll] = useState(false)
+  const [linkedSubtitleScrollAnchor, setLinkedSubtitleScrollAnchor] = useState(null)
 
   // Persistent Data Restoration
   useEffect(() => {
@@ -490,6 +541,7 @@ export function TranslatorApplication() {
     setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
     setSystemInstruction(localStorage.getItem(SYSTEM_INSTRUCTION) ?? "")
     setKeepMergeLanguageTag(localStorage.getItem(KEEP_MERGE_LANGUAGE_TAG) === "true")
+    setLinkSubtitleScroll(localStorage.getItem(LINK_SUBTITLE_SCROLL) === "true")
     let storedModelHistory = []
     try {
       storedModelHistory = JSON.parse(localStorage.getItem(MODEL_HISTORY) ?? "[]")
@@ -545,6 +597,14 @@ export function TranslatorApplication() {
 
     setShowTranslationProgressPanel(false)
   }, [translatorRunningState])
+
+  useEffect(() => {
+    if (linkSubtitleScroll) {
+      return
+    }
+
+    setLinkedSubtitleScrollAnchor(null)
+  }, [linkSubtitleScroll])
 
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
@@ -631,6 +691,11 @@ export function TranslatorApplication() {
   function setKeepMergeLanguageTagValue(value) {
     localStorage.setItem(KEEP_MERGE_LANGUAGE_TAG, String(value))
     setKeepMergeLanguageTag(value)
+  }
+
+  function setLinkSubtitleScrollValue(value) {
+    localStorage.setItem(LINK_SUBTITLE_SCROLL, String(value))
+    setLinkSubtitleScroll(value)
   }
 
   /**
@@ -1036,6 +1101,18 @@ export function TranslatorApplication() {
   const hasPendingSubtitleEdits = hasPendingInputEdits || hasPendingOutputEdits
   const translationCompletedCount = outputs.length
   const translationTotalCount = inputs.length
+
+  function handleLinkedSubtitleScrollAnchorChange(nextAnchor) {
+    setLinkedSubtitleScrollAnchor((currentAnchor) => {
+      if (
+        currentAnchor?.rowIndex === nextAnchor?.rowIndex &&
+        currentAnchor?.sourceTableId === nextAnchor?.sourceTableId
+      ) {
+        return currentAnchor
+      }
+      return nextAnchor
+    })
+  }
 
   return (
     <>
@@ -1514,15 +1591,36 @@ export function TranslatorApplication() {
           <Divider className='mt-3 sm:mt-0' />
         </div>
 
+        <div className='px-4 mt-4'>
+          <div className='flex items-center justify-end'>
+            <div className='flex items-center gap-3 rounded-2xl border border-default-200 bg-content1 px-4 py-3 shadow-sm'>
+              <Switch
+                size='sm'
+                isSelected={linkSubtitleScroll}
+                onValueChange={setLinkSubtitleScrollValue}
+              >
+              </Switch>
+              <div className='flex flex-col gap-0.5'>
+                <p className='text-sm font-medium'>Link Input and Output Scroll</p>
+                <p className='text-xs text-default-500'>Scroll both editors together by subtitle position.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="lg:flex lg:gap-4 px-4 mt-4">
           <div className="lg:w-1/2">
             <SubtitleCard label={"Input"}>
               <SubtitleEditorTable
+                tableId="input"
                 description="Editable subtitle rows. Apply changes before translating."
                 rows={inputEditorRows}
                 pendingLabel={hasPendingInputEdits ? "Pending source changes" : ""}
                 disabled={translatorRunningState}
                 priorityRenderCount={0}
+                linkedScrollEnabled={linkSubtitleScroll}
+                linkedScrollAnchor={linkedSubtitleScrollAnchor}
+                onLinkedScrollAnchorChange={handleLinkedSubtitleScrollAnchorChange}
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setInputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
@@ -1531,11 +1629,15 @@ export function TranslatorApplication() {
           <div className="lg:w-1/2">
             <SubtitleCard label={"Output"}>
               <SubtitleEditorTable
+                tableId="output"
                 description="Editable translated rows. Applied changes are used for export and merge."
                 rows={outputEditorRows}
                 pendingLabel={hasPendingOutputEdits ? "Pending translation changes" : ""}
                 disabled={translatorRunningState}
                 priorityRenderCount={translationCompletedCount}
+                linkedScrollEnabled={linkSubtitleScroll}
+                linkedScrollAnchor={linkedSubtitleScrollAnchor}
+                onLinkedScrollAnchorChange={handleLinkedSubtitleScrollAnchorChange}
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setOutputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
