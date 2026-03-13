@@ -179,6 +179,18 @@ function updateSubtitleEditorRow(setRows, rowIndex, field, value) {
   })
 }
 
+function buildOutputEditorRow(subtitle, text = "") {
+  const { hasEngTag, text: normalizedText } = splitSubtitleTextForEditor(text)
+
+  return {
+    id: subtitle?.id ?? "",
+    startTime: subtitle?.startTime ?? "",
+    endTime: subtitle?.endTime ?? "",
+    text: normalizedText,
+    hasEngTag,
+  }
+}
+
 function getSubtitleEditorRowLineCount(row) {
   return Math.max(1, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)
 }
@@ -830,11 +842,17 @@ export function TranslatorApplication() {
     setTranslatorRunningState(true)
     console.log("[User Interface]", "Begin Generation")
     translatorRunningRef.current = true
-    setOutput([])
-    setUsageInformation(null)
     let currentStream = ""
     const outputWorkingProgress = subtitleParser.fromSrt(srtInputText)
     const currentOutputs = []
+    const initialOutputRows = outputWorkingProgress.map((subtitle) => buildOutputEditorRow(subtitle))
+    startTransition(() => {
+      setOutput([])
+      setUsageInformation(null)
+      setSrtOutputText("")
+      setOutputAppliedRows(initialOutputRows)
+      setOutputEditorRows(initialOutputRows)
+    })
     console.log("OPENAI_BASE_URL", baseUrlValue)
     const openai = createOpenAIClient(APIvalue, true, baseUrlValue)
 
@@ -896,7 +914,20 @@ export function TranslatorApplication() {
         const cleanedTransform = sanitizeTranslatedSubtitleLine(output.finalTransform, srtEntry?.text ?? "")
         currentOutputs.push(cleanedTransform)
         srtEntry.text = cleanedTransform
-        setOutput([...currentOutputs])
+        const nextOutputRow = buildOutputEditorRow(srtEntry, cleanedTransform)
+        startTransition(() => {
+          setOutput([...currentOutputs])
+          setOutputAppliedRows((rows) => {
+            const nextRows = rows.slice()
+            nextRows[output.index - 1] = nextOutputRow
+            return nextRows
+          })
+          setOutputEditorRows((rows) => {
+            const nextRows = rows.slice()
+            nextRows[output.index - 1] = nextOutputRow
+            return nextRows
+          })
+        })
         setUsageInformation(translatorRef.current.usage)
         setRPMInformation(translatorRef.current.services.cooler?.rate)
       }
