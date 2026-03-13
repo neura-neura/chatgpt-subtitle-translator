@@ -196,7 +196,7 @@ function getSubtitleEditorRowLineCount(row) {
 }
 
 function getSubtitleEditorRowHeight(row) {
-  return Math.max(116, 86 + (getSubtitleEditorRowLineCount(row) - 1) * 24)
+  return Math.max(124, 92 + (getSubtitleEditorRowLineCount(row) - 1) * 24)
 }
 
 function SubtitleEditorTable({
@@ -205,6 +205,7 @@ function SubtitleEditorTable({
   onRowChange,
   pendingLabel,
   disabled,
+  priorityRenderCount = 0,
 }) {
   const containerRef = useRef(null)
   const [scrollTop, setScrollTop] = useState(0)
@@ -301,7 +302,24 @@ function SubtitleEditorTable({
     visibleEndIndex += 1
   }
 
-  const visibleRows = filteredRows.slice(visibleStartIndex, visibleEndIndex)
+  const visibleRowMap = new Map()
+  const priorityCount = Math.min(priorityRenderCount, filteredRows.length)
+
+  for (let index = 0; index < priorityCount; index += 1) {
+    const entry = filteredRows[index]
+    visibleRowMap.set(entry.rowIndex, entry)
+  }
+
+  for (let index = visibleStartIndex; index < visibleEndIndex; index += 1) {
+    const entry = filteredRows[index]
+    if (!entry) {
+      continue
+    }
+    visibleRowMap.set(entry.rowIndex, entry)
+  }
+
+  const visibleRows = Array.from(visibleRowMap.values())
+    .sort((a, b) => a.rowIndex - b.rowIndex)
 
   return (
     <div className='px-4 pb-4 pt-3'>
@@ -392,7 +410,7 @@ function SubtitleEditorTable({
                           </div>
                         </div>
                         <textarea
-                          className='h-[calc(100%-2.5rem)] min-h-[3.5rem] w-full resize-none rounded-xl border border-default-200 bg-content1 px-3 py-2 font-mono text-sm leading-5 outline-none'
+                          className='h-[calc(100%-2.5rem)] min-h-[4rem] w-full resize-none rounded-xl border border-default-200 bg-content1 px-3 py-2 font-mono text-sm leading-5 outline-none'
                           rows={getSubtitleEditorRowLineCount(row)}
                           value={row.text}
                           onChange={(event) => onRowChange(rowIndex, "text", event.target.value)}
@@ -1504,6 +1522,7 @@ export function TranslatorApplication() {
                 rows={inputEditorRows}
                 pendingLabel={hasPendingInputEdits ? "Pending source changes" : ""}
                 disabled={translatorRunningState}
+                priorityRenderCount={0}
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setInputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
@@ -1516,6 +1535,7 @@ export function TranslatorApplication() {
                 rows={outputEditorRows}
                 pendingLabel={hasPendingOutputEdits ? "Pending translation changes" : ""}
                 disabled={translatorRunningState}
+                priorityRenderCount={translationCompletedCount}
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setOutputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
