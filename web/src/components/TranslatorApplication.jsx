@@ -515,11 +515,11 @@ export function TranslatorApplication() {
 
   // Translator State
   const [srtInputText, setSrtInputText] = useState(sampleSrt)
-  const [srtOutputText, setSrtOutputText] = useState(sampleSrt)
+  const [srtOutputText, setSrtOutputText] = useState("")
   const [inputAppliedRows, setInputAppliedRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
   const [inputEditorRows, setInputEditorRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
-  const [outputAppliedRows, setOutputAppliedRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
-  const [outputEditorRows, setOutputEditorRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
+  const [outputAppliedRows, setOutputAppliedRows] = useState([])
+  const [outputEditorRows, setOutputEditorRows] = useState([])
   const [inputs, setInputs] = useState(subtitleParser.fromSrt(sampleSrt).map(x => x.text))
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
