@@ -153,77 +153,77 @@ function SubtitleEditorTable({
   disabled,
 }) {
   return (
-    <>
-      <div className='flex items-center justify-between gap-4 px-4 pt-4'>
-        <div className='flex flex-col gap-1'>
-          <p className='text-xs text-default-500'>{description}</p>
-          <p className='text-[11px] text-default-400'>Literal \n or \N is shown as a real line break in the text column.</p>
+    <div className='px-4 pb-4 pt-3'>
+      <div className='mb-2 flex items-center justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='text-[11px] text-default-500'>{description}</p>
+          <p className='text-[10px] text-default-400'>`\n` and `\N` are shown as real line breaks in the text cell.</p>
         </div>
         {pendingLabel && (
-          <p className='shrink-0 text-xs font-semibold text-warning-600'>{pendingLabel}</p>
+          <span className='shrink-0 rounded-full bg-warning-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-warning-700'>
+            {pendingLabel}
+          </span>
         )}
       </div>
 
       {rows.length === 0 ? (
-        <div className='px-4 pb-4 pt-3'>
-          <p className='rounded-xl border border-dashed border-default-200 px-4 py-6 text-sm text-default-500'>
-            No subtitles loaded in this panel yet.
-          </p>
-        </div>
+        <p className='rounded-xl border border-dashed border-default-200 px-4 py-6 text-sm text-default-500'>
+          No subtitles loaded in this panel yet.
+        </p>
       ) : (
-        <div className='overflow-auto px-4 pb-4 pt-3'>
+        <div className='overflow-auto rounded-xl border border-default-200 bg-content1 shadow-inner'>
           <table className='min-w-full border-separate border-spacing-0'>
-            <thead>
-              <tr className='bg-default-100 text-left text-xs uppercase tracking-wide text-default-500'>
-                <th className='rounded-l-xl border-b border-default-200 px-3 py-2'>#</th>
-                <th className='border-b border-default-200 px-3 py-2'>Start</th>
-                <th className='border-b border-default-200 px-3 py-2'>End</th>
-                <th className='border-b border-default-200 px-3 py-2'>Text</th>
-                <th className='rounded-r-xl border-b border-default-200 px-3 py-2 text-center'>ENG</th>
+            <thead className='sticky top-0 z-10'>
+              <tr className='bg-default-100/95 text-left text-[10px] uppercase tracking-[0.14em] text-default-500 backdrop-blur'>
+                <th className='border-b border-default-200 px-2 py-2'>#</th>
+                <th className='border-b border-default-200 px-2 py-2'>Start</th>
+                <th className='border-b border-default-200 px-2 py-2'>End</th>
+                <th className='border-b border-default-200 px-2 py-2'>Text</th>
+                <th className='border-b border-default-200 px-2 py-2 text-center'>ENG</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, index) => (
-                <tr key={`${index}-${row.id}`} className='align-top'>
-                  <td className='border-b border-default-100 px-2 py-2'>
+                <tr key={`${index}-${row.id}`} className={`align-top ${index % 2 === 0 ? "bg-transparent" : "bg-default-50/35"}`}>
+                  <td className='border-b border-default-100 px-1.5 py-1.5'>
                     <input
-                      className='w-16 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      className='h-8 w-14 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
                       type="text"
                       value={row.id}
                       onChange={(event) => onRowChange(index, "id", event.target.value)}
                       disabled={disabled}
                     />
                   </td>
-                  <td className='border-b border-default-100 px-2 py-2'>
+                  <td className='border-b border-default-100 px-1.5 py-1.5'>
                     <input
-                      className='w-36 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      className='h-8 w-32 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
                       type="text"
                       value={row.startTime}
                       onChange={(event) => onRowChange(index, "startTime", event.target.value)}
                       disabled={disabled}
                     />
                   </td>
-                  <td className='border-b border-default-100 px-2 py-2'>
+                  <td className='border-b border-default-100 px-1.5 py-1.5'>
                     <input
-                      className='w-36 rounded-lg border border-default-200 bg-content1 px-2 py-2 font-mono text-sm outline-none'
+                      className='h-8 w-32 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
                       type="text"
                       value={row.endTime}
                       onChange={(event) => onRowChange(index, "endTime", event.target.value)}
                       disabled={disabled}
                     />
                   </td>
-                  <td className='border-b border-default-100 px-2 py-2'>
+                  <td className='border-b border-default-100 px-1.5 py-1.5'>
                     <textarea
-                      className='min-h-[4.5rem] w-full min-w-[20rem] resize-y rounded-lg border border-default-200 bg-content1 px-3 py-2 font-mono text-sm outline-none'
-                      rows={Math.max(2, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)}
+                      className='min-h-[2.75rem] w-full min-w-[18rem] resize-y rounded-md border border-default-200 bg-background px-2.5 py-2 font-mono text-sm leading-5 outline-none'
+                      rows={Math.max(1, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)}
                       value={row.text}
                       onChange={(event) => onRowChange(index, "text", event.target.value)}
                       disabled={disabled}
                       spellCheck={false}
                     />
                   </td>
-                  <td className='border-b border-default-100 px-2 py-2 text-center'>
-                    <div className='flex justify-center pt-2'>
+                  <td className='border-b border-default-100 px-1.5 py-1.5 text-center'>
+                    <div className='flex h-8 items-center justify-center'>
                       <Switch
                         size='sm'
                         isSelected={Boolean(row.hasEngTag)}
@@ -239,7 +239,7 @@ function SubtitleEditorTable({
           </table>
         </div>
       )}
-    </>
+    </div>
   )
 }
 
@@ -293,6 +293,7 @@ export function TranslatorApplication() {
   const [connectionTestMessage, setConnectionTestMessage] = useState("")
   const [connectionTestState, setConnectionTestState] = useState("idle")
   const [isTestingConnection, setIsTestingConnection] = useState(false)
+  const [showTranslationProgressPanel, setShowTranslationProgressPanel] = useState(false)
 
   // Persistent Data Restoration
   useEffect(() => {
@@ -349,6 +350,14 @@ export function TranslatorApplication() {
 
     return () => window.clearTimeout(timeout)
   }, [mergeStatusMessage])
+
+  useEffect(() => {
+    if (translatorRunningState) {
+      return
+    }
+
+    setShowTranslationProgressPanel(false)
+  }, [translatorRunningState])
 
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
@@ -816,6 +825,8 @@ export function TranslatorApplication() {
   const hasPendingInputEdits = serializeSubtitleEditorRows(inputEditorRows) !== serializeSubtitleEditorRows(inputAppliedRows)
   const hasPendingOutputEdits = serializeSubtitleEditorRows(outputEditorRows) !== serializeSubtitleEditorRows(outputAppliedRows)
   const hasPendingSubtitleEdits = hasPendingInputEdits || hasPendingOutputEdits
+  const translationCompletedCount = outputs.length
+  const translationTotalCount = inputs.length
 
   return (
     <>
@@ -1314,10 +1325,6 @@ export function TranslatorApplication() {
                 disabled={translatorRunningState}
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setOutputEditorRows, rowIndex, field, value)}
               />
-              <pre className='px-4 pb-4 text-wrap text-sm text-default-500'>
-                {streamOutput && "Streaming translation progress:\n"}
-                {streamOutput}
-              </pre>
             </SubtitleCard>
 
             {usageInformation && (
@@ -1359,6 +1366,42 @@ export function TranslatorApplication() {
                 <CloseIcon />
               </Button>
             </CardBody>
+          </Card>
+        </div>
+      )}
+      {translatorRunningState && (
+        <div className='fixed bottom-4 left-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)]'>
+          <Card shadow="lg" className='border border-primary-200 bg-content1/95 backdrop-blur'>
+            <button
+              type='button'
+              className='flex w-full items-center justify-between gap-3 px-4 py-3 text-left'
+              onClick={() => setShowTranslationProgressPanel((value) => !value)}
+            >
+              <div className='flex min-w-0 items-center gap-3'>
+                <span className='relative flex h-3 w-3 shrink-0'>
+                  <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-40'></span>
+                  <span className='relative inline-flex h-3 w-3 rounded-full bg-primary'></span>
+                </span>
+                <div className='min-w-0'>
+                  <p className='text-sm font-semibold text-foreground'>Translating {translationCompletedCount}/{translationTotalCount}</p>
+                  <p className='truncate text-xs text-default-500'>
+                    {showTranslationProgressPanel ? "Hide live progress" : "Show live progress"}
+                  </p>
+                </div>
+              </div>
+              <ChevronDownIcon className={`shrink-0 transition-transform ${showTranslationProgressPanel ? "rotate-180" : ""}`} />
+            </button>
+
+            {showTranslationProgressPanel && (
+              <>
+                <Divider />
+                <CardBody className='p-0'>
+                  <pre className='max-h-72 overflow-auto whitespace-pre-wrap px-4 py-3 text-sm text-default-600'>
+                    {streamOutput || "Waiting for streamed output..."}
+                  </pre>
+                </CardBody>
+              </>
+            )}
           </Card>
         </div>
       )}
