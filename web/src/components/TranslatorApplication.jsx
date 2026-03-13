@@ -56,6 +56,8 @@ function normalizeSubtitleEditorLineBreaks(text) {
     .replace(/\r/g, "\n")
     .replace(/\\N/g, "\n")
     .replace(/\\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
 }
 
 function escapeRegExp(value) {
@@ -277,9 +279,17 @@ function SubtitleEditorTable({
         anchorFilteredIndex += 1
       }
 
+      const anchorRowTop = rowOffsets[anchorFilteredIndex] ?? 0
+      const anchorRowHeight = rowHeights[anchorFilteredIndex] ?? 1
+      const rowOffsetRatio = Math.max(
+        0,
+        Math.min(1, (nextScrollTop - anchorRowTop) / anchorRowHeight)
+      )
+
       onLinkedScrollAnchorChange?.({
         rowIndex: filteredRows[anchorFilteredIndex]?.rowIndex ?? 0,
         sourceTableId: tableId,
+        rowOffsetRatio,
       })
     }
 
@@ -328,14 +338,16 @@ function SubtitleEditorTable({
       targetFilteredIndex = filteredRows.length - 1
     }
 
-    const nextScrollTop = rowOffsets[targetFilteredIndex] ?? 0
+    const targetRowTop = rowOffsets[targetFilteredIndex] ?? 0
+    const targetRowHeight = rowHeights[targetFilteredIndex] ?? 1
+    const nextScrollTop = targetRowTop + ((linkedScrollAnchor.rowOffsetRatio ?? 0) * targetRowHeight)
     suppressLinkedScrollRef.current = true
     container.scrollTop = nextScrollTop
     setScrollTop(nextScrollTop)
     window.requestAnimationFrame(() => {
       suppressLinkedScrollRef.current = false
     })
-  }, [filteredRows, linkedScrollAnchor, linkedScrollEnabled, rowOffsets, tableId])
+  }, [filteredRows, linkedScrollAnchor, linkedScrollEnabled, rowHeights, rowOffsets, tableId])
 
   const minVisibleOffset = Math.max(0, scrollTop - overscan)
   const maxVisibleOffset = scrollTop + viewportHeight + overscan
@@ -1104,9 +1116,13 @@ export function TranslatorApplication() {
 
   function handleLinkedSubtitleScrollAnchorChange(nextAnchor) {
     setLinkedSubtitleScrollAnchor((currentAnchor) => {
+      const currentRowOffsetRatio = Math.round((currentAnchor?.rowOffsetRatio ?? 0) * 1000)
+      const nextRowOffsetRatio = Math.round((nextAnchor?.rowOffsetRatio ?? 0) * 1000)
+
       if (
         currentAnchor?.rowIndex === nextAnchor?.rowIndex &&
-        currentAnchor?.sourceTableId === nextAnchor?.sourceTableId
+        currentAnchor?.sourceTableId === nextAnchor?.sourceTableId &&
+        currentRowOffsetRatio === nextRowOffsetRatio
       ) {
         return currentAnchor
       }
