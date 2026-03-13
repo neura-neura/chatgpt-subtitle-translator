@@ -1,5 +1,5 @@
 "use client"
-import React, { useEffect, useRef, useState } from 'react'
+import React, { startTransition, useEffect, useRef, useState } from 'react'
 import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent, Autocomplete, AutocompleteItem } from "@nextui-org/react";
 
 import { EyeSlashFilledIcon } from './EyeSlashFilledIcon';
@@ -172,11 +172,19 @@ function serializeSubtitleEditorRows(rows) {
 }
 
 function updateSubtitleEditorRow(setRows, rowIndex, field, value) {
-  setRows((rows) => rows.map((row, index) => (
-    index === rowIndex
-      ? { ...row, [field]: value }
-      : row
-  )))
+  setRows((rows) => {
+    const nextRows = rows.slice()
+    nextRows[rowIndex] = { ...nextRows[rowIndex], [field]: value }
+    return nextRows
+  })
+}
+
+function getSubtitleEditorRowLineCount(row) {
+  return Math.max(1, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)
+}
+
+function getSubtitleEditorRowHeight(row) {
+  return Math.max(96, 72 + (getSubtitleEditorRowLineCount(row) - 1) * 22)
 }
 
 function SubtitleEditorTable({
@@ -186,6 +194,76 @@ function SubtitleEditorTable({
   pendingLabel,
   disabled,
 }) {
+  const containerRef = useRef(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(640)
+  const rowGap = 10
+  const overscan = 500
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) {
+      return
+    }
+
+    const updateViewportMetrics = () => {
+      setViewportHeight(container.clientHeight || 640)
+      setScrollTop(container.scrollTop)
+    }
+
+    const handleScroll = () => {
+      setScrollTop(container.scrollTop)
+    }
+
+    updateViewportMetrics()
+    container.addEventListener("scroll", handleScroll, { passive: true })
+    window.addEventListener("resize", updateViewportMetrics)
+
+    let resizeObserver
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(updateViewportMetrics)
+      resizeObserver.observe(container)
+    }
+
+    return () => {
+      container.removeEventListener("scroll", handleScroll)
+      window.removeEventListener("resize", updateViewportMetrics)
+      resizeObserver?.disconnect()
+    }
+  }, [])
+
+  const rowOffsets = []
+  const rowHeights = []
+  let totalHeight = 0
+
+  for (const row of rows) {
+    rowOffsets.push(totalHeight)
+    const rowHeight = getSubtitleEditorRowHeight(row)
+    rowHeights.push(rowHeight)
+    totalHeight += rowHeight + rowGap
+  }
+
+  if (rows.length > 0) {
+    totalHeight -= rowGap
+  }
+
+  const minVisibleOffset = Math.max(0, scrollTop - overscan)
+  const maxVisibleOffset = scrollTop + viewportHeight + overscan
+  let visibleStartIndex = 0
+  while (
+    visibleStartIndex < rows.length &&
+    rowOffsets[visibleStartIndex] + rowHeights[visibleStartIndex] < minVisibleOffset
+  ) {
+    visibleStartIndex += 1
+  }
+
+  let visibleEndIndex = visibleStartIndex
+  while (visibleEndIndex < rows.length && rowOffsets[visibleEndIndex] <= maxVisibleOffset) {
+    visibleEndIndex += 1
+  }
+
+  const visibleRows = rows.slice(visibleStartIndex, visibleEndIndex)
+
   return (
     <div className='px-4 pb-4 pt-3'>
       <div className='mb-2 flex items-center justify-between gap-3'>
@@ -205,72 +283,73 @@ function SubtitleEditorTable({
           No subtitles loaded in this panel yet.
         </p>
       ) : (
-        <div className='overflow-auto rounded-xl border border-default-200 bg-content1 shadow-inner'>
-          <table className='min-w-full border-separate border-spacing-0'>
-            <thead className='sticky top-0 z-10'>
-              <tr className='bg-default-100/95 text-left text-[10px] uppercase tracking-[0.14em] text-default-500 backdrop-blur'>
-                <th className='border-b border-default-200 px-2 py-2'>#</th>
-                <th className='border-b border-default-200 px-2 py-2'>Start</th>
-                <th className='border-b border-default-200 px-2 py-2'>End</th>
-                <th className='border-b border-default-200 px-2 py-2'>Text</th>
-                <th className='border-b border-default-200 px-2 py-2 text-center'>ENG</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={`${index}-${row.id}`} className={`align-top ${index % 2 === 0 ? "bg-transparent" : "bg-default-50/35"}`}>
-                  <td className='border-b border-default-100 px-1.5 py-1.5'>
-                    <input
-                      className='h-8 w-14 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
-                      type="text"
-                      value={row.id}
-                      onChange={(event) => onRowChange(index, "id", event.target.value)}
-                      disabled={disabled}
-                    />
-                  </td>
-                  <td className='border-b border-default-100 px-1.5 py-1.5'>
-                    <input
-                      className='h-8 w-32 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
-                      type="text"
-                      value={row.startTime}
-                      onChange={(event) => onRowChange(index, "startTime", event.target.value)}
-                      disabled={disabled}
-                    />
-                  </td>
-                  <td className='border-b border-default-100 px-1.5 py-1.5'>
-                    <input
-                      className='h-8 w-32 rounded-md border border-default-200 bg-background px-2 font-mono text-xs outline-none'
-                      type="text"
-                      value={row.endTime}
-                      onChange={(event) => onRowChange(index, "endTime", event.target.value)}
-                      disabled={disabled}
-                    />
-                  </td>
-                  <td className='border-b border-default-100 px-1.5 py-1.5'>
-                    <textarea
-                      className='min-h-[2.75rem] w-full min-w-[18rem] resize-y rounded-md border border-default-200 bg-background px-2.5 py-2 font-mono text-sm leading-5 outline-none'
-                      rows={Math.max(1, normalizeSubtitleEditorLineBreaks(row.text ?? "").split("\n").length)}
-                      value={row.text}
-                      onChange={(event) => onRowChange(index, "text", event.target.value)}
-                      disabled={disabled}
-                      spellCheck={false}
-                    />
-                  </td>
-                  <td className='border-b border-default-100 px-1.5 py-1.5 text-center'>
-                    <div className='flex h-8 items-center justify-center'>
-                      <Switch
-                        size='sm'
-                        isSelected={Boolean(row.hasEngTag)}
-                        onValueChange={(value) => onRowChange(index, "hasEngTag", value)}
-                        isDisabled={disabled}
-                      >
-                      </Switch>
+        <div className='overflow-hidden rounded-xl border border-default-200 bg-content1 shadow-inner'>
+          <div className='flex items-center justify-between gap-2 border-b border-default-200 bg-default-100/80 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-default-500'>
+            <span>Subtitle Rows</span>
+            <span>{rows.length} entries</span>
+          </div>
+          <div ref={containerRef} className='h-[36rem] overflow-y-auto px-2 py-2'>
+            <div className='relative' style={{ height: `${Math.max(totalHeight, 1)}px` }}>
+              {visibleRows.map((row, visibleIndex) => {
+                const rowIndex = visibleStartIndex + visibleIndex
+                const rowTop = rowOffsets[rowIndex]
+                const rowHeight = rowHeights[rowIndex]
+
+                return (
+                  <div
+                    key={`${rowIndex}-${row.id}`}
+                    className='absolute left-0 right-0'
+                    style={{ top: `${rowTop}px`, height: `${rowHeight}px` }}
+                  >
+                    <div className='h-full rounded-2xl border border-default-200 bg-background/85 px-2.5 py-2 shadow-sm transition-colors hover:border-default-300'>
+                      <div className='mb-2 flex flex-wrap items-center gap-2'>
+                        <input
+                          className='h-8 w-14 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                          type="text"
+                          value={row.id}
+                          onChange={(event) => onRowChange(rowIndex, "id", event.target.value)}
+                          disabled={disabled}
+                        />
+                        <input
+                          className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                          type="text"
+                          value={row.startTime}
+                          onChange={(event) => onRowChange(rowIndex, "startTime", event.target.value)}
+                          disabled={disabled}
+                        />
+                        <span className='text-xs text-default-400'>to</span>
+                        <input
+                          className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                          type="text"
+                          value={row.endTime}
+                          onChange={(event) => onRowChange(rowIndex, "endTime", event.target.value)}
+                          disabled={disabled}
+                        />
+                        <div className='ml-auto flex items-center gap-2 rounded-full bg-default-100 px-2 py-1'>
+                          <span className='text-[10px] font-semibold uppercase tracking-[0.14em] text-default-500'>ENG</span>
+                          <Switch
+                            size='sm'
+                            isSelected={Boolean(row.hasEngTag)}
+                            onValueChange={(value) => onRowChange(rowIndex, "hasEngTag", value)}
+                            isDisabled={disabled}
+                          >
+                          </Switch>
+                        </div>
+                      </div>
+                      <textarea
+                        className='h-[calc(100%-2.5rem)] min-h-[2.75rem] w-full resize-none rounded-xl border border-default-200 bg-content1 px-3 py-2 font-mono text-sm leading-5 outline-none'
+                        rows={getSubtitleEditorRowLineCount(row)}
+                        value={row.text}
+                        onChange={(event) => onRowChange(rowIndex, "text", event.target.value)}
+                        disabled={disabled}
+                        spellCheck={false}
+                      />
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -559,10 +638,12 @@ export function TranslatorApplication() {
         const normalizedInputText = buildSrtFromParsedSubtitles(parsedInput)
         const normalizedInputRows = buildSubtitleEditorRows(normalizedInputText)
 
-        setSrtInputText(normalizedInputText)
-        setInputAppliedRows(normalizedInputRows)
-        setInputEditorRows(normalizedInputRows)
-        setInputs(parsedInput.map(item => item.text))
+        startTransition(() => {
+          setSrtInputText(normalizedInputText)
+          setInputAppliedRows(normalizedInputRows)
+          setInputEditorRows(normalizedInputRows)
+          setInputs(parsedInput.map(item => item.text))
+        })
 
         if (mergePrimarySubtitle?.source !== "manual") {
           setMergePrimarySubtitle({
@@ -582,10 +663,12 @@ export function TranslatorApplication() {
         const normalizedOutputText = buildSrtFromParsedSubtitles(parsedOutput)
         const normalizedOutputRows = buildSubtitleEditorRows(normalizedOutputText)
 
-        setSrtOutputText(normalizedOutputText)
-        setOutputAppliedRows(normalizedOutputRows)
-        setOutputEditorRows(normalizedOutputRows)
-        setOutput(parsedOutput.map(item => item.text))
+        startTransition(() => {
+          setSrtOutputText(normalizedOutputText)
+          setOutputAppliedRows(normalizedOutputRows)
+          setOutputEditorRows(normalizedOutputRows)
+          setOutput(parsedOutput.map(item => item.text))
+        })
 
         if (mergeSecondarySubtitle?.source !== "manual") {
           setMergeSecondarySubtitle(normalizedOutputText.trim() ? {
@@ -819,10 +902,12 @@ export function TranslatorApplication() {
       }
       console.log({ sourceInputWorkingCopy: outputWorkingProgress })
       const translatedSrt = buildSrtFromParsedSubtitles(outputWorkingProgress)
-      setSrtOutputText(translatedSrt)
       const nextOutputRows = buildSubtitleEditorRows(translatedSrt)
-      setOutputAppliedRows(nextOutputRows)
-      setOutputEditorRows(nextOutputRows)
+      startTransition(() => {
+        setSrtOutputText(translatedSrt)
+        setOutputAppliedRows(nextOutputRows)
+        setOutputEditorRows(nextOutputRows)
+      })
       setMergeSecondarySubtitle({
         name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
         text: translatedSrt,
@@ -1210,13 +1295,15 @@ export function TranslatorApplication() {
               const text = await file.text()
               const parsed = subtitleParser.fromSrt(text)
               const nextInputRows = buildSubtitleEditorRows(text)
-              setSrtInputText(text)
-              setInputAppliedRows(nextInputRows)
-              setInputEditorRows(nextInputRows)
-              setInputs(parsed.map(x => x.text))
-              setSrtOutputText("")
-              setOutputAppliedRows([])
-              setOutputEditorRows([])
+              startTransition(() => {
+                setSrtInputText(text)
+                setInputAppliedRows(nextInputRows)
+                setInputEditorRows(nextInputRows)
+                setInputs(parsed.map(x => x.text))
+                setSrtOutputText("")
+                setOutputAppliedRows([])
+                setOutputEditorRows([])
+              })
               setImportedSubtitleFileName(file.name)
               setMergePrimarySubtitle({
                 name: file.name,
