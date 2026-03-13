@@ -1,5 +1,5 @@
 "use client"
-import React, { startTransition, useEffect, useRef, useState } from 'react'
+import React, { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react'
 import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent, Autocomplete, AutocompleteItem } from "@nextui-org/react";
 
 import { EyeSlashFilledIcon } from './EyeSlashFilledIcon';
@@ -196,7 +196,7 @@ function getSubtitleEditorRowLineCount(row) {
 }
 
 function getSubtitleEditorRowHeight(row) {
-  return Math.max(96, 72 + (getSubtitleEditorRowLineCount(row) - 1) * 22)
+  return Math.max(116, 86 + (getSubtitleEditorRowLineCount(row) - 1) * 24)
 }
 
 function SubtitleEditorTable({
@@ -209,6 +209,8 @@ function SubtitleEditorTable({
   const containerRef = useRef(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(640)
+  const [searchValue, setSearchValue] = useState("")
+  const deferredSearchValue = useDeferredValue(searchValue)
   const rowGap = 10
   const overscan = 500
 
@@ -244,18 +246,43 @@ function SubtitleEditorTable({
     }
   }, [])
 
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) {
+      return
+    }
+
+    container.scrollTop = 0
+    setScrollTop(0)
+  }, [deferredSearchValue])
+
+  const normalizedSearchValue = deferredSearchValue.trim().toLowerCase()
+  const filteredRows = normalizedSearchValue
+    ? rows
+      .map((row, rowIndex) => ({ row, rowIndex }))
+      .filter(({ row }) => {
+        const searchableText = [
+          row.id,
+          row.startTime,
+          row.endTime,
+          normalizeSubtitleEditorLineBreaks(row.text),
+        ].join("\n").toLowerCase()
+        return searchableText.includes(normalizedSearchValue)
+      })
+    : rows.map((row, rowIndex) => ({ row, rowIndex }))
+
   const rowOffsets = []
   const rowHeights = []
   let totalHeight = 0
 
-  for (const row of rows) {
+  for (const { row } of filteredRows) {
     rowOffsets.push(totalHeight)
     const rowHeight = getSubtitleEditorRowHeight(row)
     rowHeights.push(rowHeight)
     totalHeight += rowHeight + rowGap
   }
 
-  if (rows.length > 0) {
+  if (filteredRows.length > 0) {
     totalHeight -= rowGap
   }
 
@@ -263,18 +290,18 @@ function SubtitleEditorTable({
   const maxVisibleOffset = scrollTop + viewportHeight + overscan
   let visibleStartIndex = 0
   while (
-    visibleStartIndex < rows.length &&
+    visibleStartIndex < filteredRows.length &&
     rowOffsets[visibleStartIndex] + rowHeights[visibleStartIndex] < minVisibleOffset
   ) {
     visibleStartIndex += 1
   }
 
   let visibleEndIndex = visibleStartIndex
-  while (visibleEndIndex < rows.length && rowOffsets[visibleEndIndex] <= maxVisibleOffset) {
+  while (visibleEndIndex < filteredRows.length && rowOffsets[visibleEndIndex] <= maxVisibleOffset) {
     visibleEndIndex += 1
   }
 
-  const visibleRows = rows.slice(visibleStartIndex, visibleEndIndex)
+  const visibleRows = filteredRows.slice(visibleStartIndex, visibleEndIndex)
 
   return (
     <div className='px-4 pb-4 pt-3'>
@@ -296,72 +323,89 @@ function SubtitleEditorTable({
         </p>
       ) : (
         <div className='overflow-hidden rounded-xl border border-default-200 bg-content1 shadow-inner'>
-          <div className='flex items-center justify-between gap-2 border-b border-default-200 bg-default-100/80 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-default-500'>
-            <span>Subtitle Rows</span>
-            <span>{rows.length} entries</span>
-          </div>
-          <div ref={containerRef} className='h-[36rem] overflow-y-auto px-2 py-2'>
-            <div className='relative' style={{ height: `${Math.max(totalHeight, 1)}px` }}>
-              {visibleRows.map((row, visibleIndex) => {
-                const rowIndex = visibleStartIndex + visibleIndex
-                const rowTop = rowOffsets[rowIndex]
-                const rowHeight = rowHeights[rowIndex]
-
-                return (
-                  <div
-                    key={`${rowIndex}-${row.id}`}
-                    className='absolute left-0 right-0'
-                    style={{ top: `${rowTop}px`, height: `${rowHeight}px` }}
-                  >
-                    <div className='h-full rounded-2xl border border-default-200 bg-background/85 px-2.5 py-2 shadow-sm transition-colors hover:border-default-300'>
-                      <div className='mb-2 flex flex-wrap items-center gap-2'>
-                        <input
-                          className='h-8 w-14 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
-                          type="text"
-                          value={row.id}
-                          onChange={(event) => onRowChange(rowIndex, "id", event.target.value)}
-                          disabled={disabled}
-                        />
-                        <input
-                          className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
-                          type="text"
-                          value={row.startTime}
-                          onChange={(event) => onRowChange(rowIndex, "startTime", event.target.value)}
-                          disabled={disabled}
-                        />
-                        <span className='text-xs text-default-400'>to</span>
-                        <input
-                          className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
-                          type="text"
-                          value={row.endTime}
-                          onChange={(event) => onRowChange(rowIndex, "endTime", event.target.value)}
-                          disabled={disabled}
-                        />
-                        <div className='ml-auto flex items-center gap-2 rounded-full bg-default-100 px-2 py-1'>
-                          <span className='text-[10px] font-semibold uppercase tracking-[0.14em] text-default-500'>ENG</span>
-                          <Switch
-                            size='sm'
-                            isSelected={Boolean(row.hasEngTag)}
-                            onValueChange={(value) => onRowChange(rowIndex, "hasEngTag", value)}
-                            isDisabled={disabled}
-                          >
-                          </Switch>
-                        </div>
-                      </div>
-                      <textarea
-                        className='h-[calc(100%-2.5rem)] min-h-[2.75rem] w-full resize-none rounded-xl border border-default-200 bg-content1 px-3 py-2 font-mono text-sm leading-5 outline-none'
-                        rows={getSubtitleEditorRowLineCount(row)}
-                        value={row.text}
-                        onChange={(event) => onRowChange(rowIndex, "text", event.target.value)}
-                        disabled={disabled}
-                        spellCheck={false}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
+          <div className='border-b border-default-200 bg-default-100/80 px-3 py-2'>
+            <div className='flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.14em] text-default-500'>
+              <span>Subtitle Rows</span>
+              <span>{filteredRows.length}/{rows.length} entries</span>
+            </div>
+            <div className='mt-2'>
+              <input
+                className='h-9 w-full rounded-lg border border-default-200 bg-background px-3 text-sm outline-none'
+                type="text"
+                value={searchValue}
+                onChange={(event) => setSearchValue(event.target.value)}
+                placeholder="Search by number, start, end, or dialogue"
+              />
             </div>
           </div>
+          {filteredRows.length === 0 ? (
+            <div className='px-3 py-8 text-center text-sm text-default-500'>
+              No matches for that search.
+            </div>
+          ) : (
+            <div ref={containerRef} className='h-[36rem] overflow-y-auto px-2 py-2'>
+              <div className='relative' style={{ height: `${Math.max(totalHeight, 1)}px` }}>
+                {visibleRows.map(({ row, rowIndex }, visibleIndex) => {
+                  const virtualRowIndex = visibleStartIndex + visibleIndex
+                  const rowTop = rowOffsets[virtualRowIndex]
+                  const rowHeight = rowHeights[virtualRowIndex]
+
+                  return (
+                    <div
+                      key={`${rowIndex}-${row.id}`}
+                      className='absolute left-0 right-0'
+                      style={{ top: `${rowTop}px`, height: `${rowHeight}px` }}
+                    >
+                      <div className='h-full rounded-2xl border border-default-200 bg-background/85 px-2.5 py-2 shadow-sm transition-colors hover:border-default-300'>
+                        <div className='mb-2 flex flex-wrap items-center gap-2'>
+                          <input
+                            className='h-8 w-14 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                            type="text"
+                            value={row.id}
+                            onChange={(event) => onRowChange(rowIndex, "id", event.target.value)}
+                            disabled={disabled}
+                          />
+                          <input
+                            className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                            type="text"
+                            value={row.startTime}
+                            onChange={(event) => onRowChange(rowIndex, "startTime", event.target.value)}
+                            disabled={disabled}
+                          />
+                          <span className='text-xs text-default-400'>to</span>
+                          <input
+                            className='h-8 w-32 rounded-lg border border-default-200 bg-content1 px-2 font-mono text-xs outline-none'
+                            type="text"
+                            value={row.endTime}
+                            onChange={(event) => onRowChange(rowIndex, "endTime", event.target.value)}
+                            disabled={disabled}
+                          />
+                          <div className='ml-auto flex items-center gap-2 rounded-full bg-default-100 px-2 py-1'>
+                            <span className='text-[10px] font-semibold uppercase tracking-[0.14em] text-default-500'>ENG</span>
+                            <Switch
+                              size='sm'
+                              isSelected={Boolean(row.hasEngTag)}
+                              onValueChange={(value) => onRowChange(rowIndex, "hasEngTag", value)}
+                              isDisabled={disabled}
+                            >
+                            </Switch>
+                          </div>
+                        </div>
+                        <textarea
+                          className='h-[calc(100%-2.5rem)] min-h-[3.5rem] w-full resize-none rounded-xl border border-default-200 bg-content1 px-3 py-2 font-mono text-sm leading-5 outline-none'
+                          rows={getSubtitleEditorRowLineCount(row)}
+                          value={row.text}
+                          onChange={(event) => onRowChange(rowIndex, "text", event.target.value)}
+                          disabled={disabled}
+                          spellCheck={false}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -846,13 +890,11 @@ export function TranslatorApplication() {
     const outputWorkingProgress = subtitleParser.fromSrt(srtInputText)
     const currentOutputs = []
     const initialOutputRows = outputWorkingProgress.map((subtitle) => buildOutputEditorRow(subtitle))
-    startTransition(() => {
-      setOutput([])
-      setUsageInformation(null)
-      setSrtOutputText("")
-      setOutputAppliedRows(initialOutputRows)
-      setOutputEditorRows(initialOutputRows)
-    })
+    setOutput([])
+    setUsageInformation(null)
+    setSrtOutputText("")
+    setOutputAppliedRows(initialOutputRows)
+    setOutputEditorRows(initialOutputRows)
     console.log("OPENAI_BASE_URL", baseUrlValue)
     const openai = createOpenAIClient(APIvalue, true, baseUrlValue)
 
@@ -915,18 +957,16 @@ export function TranslatorApplication() {
         currentOutputs.push(cleanedTransform)
         srtEntry.text = cleanedTransform
         const nextOutputRow = buildOutputEditorRow(srtEntry, cleanedTransform)
-        startTransition(() => {
-          setOutput([...currentOutputs])
-          setOutputAppliedRows((rows) => {
-            const nextRows = rows.slice()
-            nextRows[output.index - 1] = nextOutputRow
-            return nextRows
-          })
-          setOutputEditorRows((rows) => {
-            const nextRows = rows.slice()
-            nextRows[output.index - 1] = nextOutputRow
-            return nextRows
-          })
+        setOutput([...currentOutputs])
+        setOutputAppliedRows((rows) => {
+          const nextRows = rows.slice()
+          nextRows[output.index - 1] = nextOutputRow
+          return nextRows
+        })
+        setOutputEditorRows((rows) => {
+          const nextRows = rows.slice()
+          nextRows[output.index - 1] = nextOutputRow
+          return nextRows
         })
         setUsageInformation(translatorRef.current.usage)
         setRPMInformation(translatorRef.current.services.cooler?.rate)
