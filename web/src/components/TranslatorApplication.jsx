@@ -390,6 +390,9 @@ export function TranslatorApplication() {
 
   async function testOllamaConnection() {
     const baseUrl = (baseUrlValue?.trim() || DefaultOllamaBaseUrl).replace(/\/+$/, "")
+    const normalizedApiValue = APIvalue?.trim() ?? ""
+    const isLocalOllamaConnection = baseUrl.includes("localhost:11434")
+    const shouldSkipAuthorizationHeader = isLocalOllamaConnection && normalizedApiValue.toLowerCase() === "ollama"
     rememberModelValue(model)
     setIsTestingConnection(true)
     setConnectionTestState("testing")
@@ -397,7 +400,7 @@ export function TranslatorApplication() {
 
     try {
       const response = await fetch(`${baseUrl}/models`, {
-        headers: APIvalue ? { Authorization: `Bearer ${APIvalue}` } : undefined,
+        headers: normalizedApiValue && !shouldSkipAuthorizationHeader ? { Authorization: `Bearer ${normalizedApiValue}` } : undefined,
       })
       const data = await response.json().catch(() => null)
 
@@ -415,7 +418,14 @@ export function TranslatorApplication() {
       )
     } catch (error) {
       setConnectionTestState("error")
-      setConnectionTestMessage(error?.message ?? String(error))
+      const rawMessage = error?.message ?? String(error)
+      const likelyOllamaCorsFailure = isGitHubPages && isLocalOllamaConnection && rawMessage === "Failed to fetch"
+
+      setConnectionTestMessage(
+        likelyOllamaCorsFailure
+          ? `Failed to fetch. Ollama is likely rejecting the browser origin. On this PC set OLLAMA_ORIGINS=${siteOrigin}, restart Ollama, then try again.`
+          : rawMessage
+      )
     } finally {
       setIsTestingConnection(false)
     }
