@@ -1521,6 +1521,41 @@ export function TranslatorApplication() {
           }}>
             Export SRT
           </Button>
+          {usageInformation && (
+            <Popover placement="bottom">
+              <PopoverTrigger>
+                <Button color="default" variant="flat">
+                  Usage
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent>
+                <div className='w-80 p-4'>
+                  <div className='flex flex-col gap-2 text-sm'>
+                    <p className='font-semibold text-foreground'>Estimated Usage</p>
+                    <p className='text-default-600'>
+                      Tokens: {usageInformation?.promptTokensUsed} + {usageInformation?.completionTokensUsed} = {usageInformation?.usedTokens}
+                    </p>
+                    {usageInformation?.wastedTokens > 0 && (
+                      <p className='text-danger'>
+                        Wasted: {usageInformation?.promptTokensWasted} + {usageInformation?.completionTokensWasted} = {usageInformation?.wastedTokens} {usageInformation?.wastedPercent}
+                      </p>
+                    )}
+                    {usageInformation?.cachedTokens > 0 && (
+                      <p className='text-success'>Cached: {usageInformation?.cachedTokens}</p>
+                    )}
+                    {usageInformation?.contextTokens > 0 && (
+                      <p className='text-default-600'>
+                        Context: {usageInformation?.contextPromptTokens} + {usageInformation?.contextCompletionTokens} = {usageInformation?.contextTokens}
+                      </p>
+                    )}
+                    <p className='text-default-600'>
+                      {usageInformation?.promptRate} + {usageInformation?.completionRate} = {usageInformation?.rate} TPM {RPMInfomation} RPM
+                    </p>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
           <div className='flex flex-col items-start'>
             <div className='flex items-stretch overflow-hidden rounded-2xl shadow-sm ring-1 ring-secondary/20'>
               <Button
@@ -1657,24 +1692,6 @@ export function TranslatorApplication() {
                 onRowChange={(rowIndex, field, value) => updateSubtitleEditorRow(setOutputEditorRows, rowIndex, field, value)}
               />
             </SubtitleCard>
-
-            {usageInformation && (
-              <Card shadow="sm" className='mt-4 p-4'>
-                <span><b>Estimated Usage</b></span>
-                <span>Tokens: {usageInformation?.promptTokensUsed} + {usageInformation?.completionTokensUsed} = {usageInformation?.usedTokens}</span>
-                {usageInformation?.wastedTokens > 0 && (
-                  <span className={'text-danger'}>Wasted: {usageInformation?.promptTokensWasted} + {usageInformation?.completionTokensWasted} = {usageInformation?.wastedTokens} {usageInformation?.wastedPercent}</span>
-                )}
-                {usageInformation?.cachedTokens > 0 && (
-                  <span className={'text-success'}>Cached: {usageInformation?.cachedTokens}</span>
-                )}
-                {usageInformation?.contextTokens > 0 && (
-                  <span>Context: {usageInformation?.contextPromptTokens} + {usageInformation?.contextCompletionTokens} = {usageInformation?.contextTokens}</span>
-                )}
-                <span>{usageInformation?.promptRate} + {usageInformation?.completionRate} = {usageInformation?.rate} TPM {RPMInfomation} RPM</span>
-              </Card>
-            )}
-
           </div>
         </div>
       </div>
