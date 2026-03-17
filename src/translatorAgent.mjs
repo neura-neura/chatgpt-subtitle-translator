@@ -584,7 +584,7 @@ export class TranslatorAgent extends TranslatorStructuredTimestamp {
                     ? `You are doing a final consolidation of all batch summaries for a subtitle file ` +
                       `into a single complete set of notes (target: ~${targetTokens} tokens). ` +
                       `This will be used as the full context for the subtitles - preserve all details.`
-                    : `You are doing a consolidation of batch summary windows for a subtitle file ` +
+                    : `You are doing consolidation of all given batch summary windows for a subtitle file ` +
                       `into a single condensed set of notes (target: ~${targetTokens} tokens). ` +
                       `More batches will follow - stay concise but keep all unique facts.`) +
                     `\n\nRules:\n` +
@@ -595,9 +595,7 @@ export class TranslatorAgent extends TranslatorStructuredTimestamp {
             },
             {
                 role: "user",
-                content: isFinal
-                    ? `# Batch summaries:\n${existing}`
-                    : `# Existing batch summaries:\n${existing}\n\n# New batch summary:\n${newNote}`
+                content: `Batch summaries:\n${existing}`
             }
         ])
         try {
