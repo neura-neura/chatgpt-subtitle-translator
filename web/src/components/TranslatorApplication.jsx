@@ -13,6 +13,7 @@ import { sampleSrt } from '@/data/sample';
 import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
 import { playCompletionSound, ensureCompletionNotificationPermission, primeCompletionAudio, showCompletionNotification } from '@/utils/completionAlerts';
 import { analyzeSubtitleImport, buildSuggestedRenameFileName, extractSubtitleImports, getPathLeaf, pairSubtitleImports, sortSubtitleImports, suggestRenameBaseName } from '@/utils/subtitleBatch';
+import { DefaultGeminiBaseUrl, DefaultGeminiModel, DefaultOllamaBaseUrl, ProviderTypes, detectProviderType, getProviderDefaults, normalizeBaseUrl } from '@/utils/providerConfig';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -33,8 +34,8 @@ const DefaultModel = "translategemma:12b-it-q4_K_M"
 const SecondaryDefaultModel = "gemma3:12b-it-qat"
 const DefaultModelOptions = [DefaultModel, SecondaryDefaultModel]
 const DefaultTemperature = 0
-const DefaultOllamaBaseUrl = "http://localhost:11434/v1"
 const MergeLanguageTag = "{\\rENG}"
+const API_PROVIDER = "API_PROVIDER"
 
 function ChevronDownIcon(props) {
   return (
@@ -669,6 +670,7 @@ export function TranslatorApplication() {
   // Translator Configuration
   const [APIvalue, setAPIValue] = useState("")
   const [baseUrlValue, setBaseUrlValue] = useState(undefined)
+  const [providerType, setProviderType] = useState(ProviderTypes.custom)
   const [fromLanguage, setFromLanguage] = useState("")
   const [toLanguage, setToLanguage] = useState("English")
   const [systemInstruction, setSystemInstruction] = useState("")
@@ -723,6 +725,7 @@ export function TranslatorApplication() {
   const [hideOllamaPagesHint, setHideOllamaPagesHint] = useState(false)
   const [connectionTestMessage, setConnectionTestMessage] = useState("")
   const [connectionTestState, setConnectionTestState] = useState("idle")
+  const [connectionTestDetails, setConnectionTestDetails] = useState("")
   const [isTestingConnection, setIsTestingConnection] = useState(false)
   const [showTranslationProgressPanel, setShowTranslationProgressPanel] = useState(false)
   const [linkSubtitleScroll, setLinkSubtitleScroll] = useState(false)
@@ -732,7 +735,10 @@ export function TranslatorApplication() {
   useEffect(() => {
     setAPIValue(localStorage.getItem(OPENAI_API_KEY) ?? "")
     setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
-    setBaseUrlWithModerator(localStorage.getItem(OPENAI_BASE_URL) ?? undefined)
+    const restoredBaseUrl = localStorage.getItem(OPENAI_BASE_URL) ?? undefined
+    setBaseUrlWithModerator(restoredBaseUrl)
+    const restoredProviderType = localStorage.getItem(API_PROVIDER) ?? detectProviderType(restoredBaseUrl)
+    setProviderType(Object.values(ProviderTypes).includes(restoredProviderType) ? restoredProviderType : ProviderTypes.custom)
     setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
     setSystemInstruction(localStorage.getItem(SYSTEM_INSTRUCTION) ?? "")
     setKeepMergeLanguageTag(localStorage.getItem(KEEP_MERGE_LANGUAGE_TAG) === "true")
@@ -810,6 +816,34 @@ export function TranslatorApplication() {
     setAPIValue(value)
   }
 
+  function setProviderTypeValue(value, applyDefaults = true) {
+    localStorage.setItem(API_PROVIDER, value)
+    setProviderType(value)
+
+    if (!applyDefaults) {
+      return
+    }
+
+    const defaults = getProviderDefaults(value)
+    if (defaults.baseUrl) {
+      setBaseUrl(defaults.baseUrl)
+    }
+    else {
+      setBaseUrl(undefined)
+    }
+
+    if (value === ProviderTypes.gemini) {
+      setModelValue(DefaultGeminiModel)
+    }
+    else if (value === ProviderTypes.ollama && (!model || model === DefaultGeminiModel)) {
+      setModelValue(DefaultModel)
+    }
+
+    setConnectionTestMessage("")
+    setConnectionTestState("idle")
+    setConnectionTestDetails("")
+  }
+
   function setBaseUrl(value) {
     if (!value) {
       value = undefined
@@ -826,6 +860,11 @@ export function TranslatorApplication() {
       if (useStructuredMode) {
         setUseStructuredMode(false)
       }
+    }
+    const detectedProviderType = detectProviderType(value)
+    if (detectedProviderType !== providerType && (value || providerType !== ProviderTypes.custom)) {
+      localStorage.setItem(API_PROVIDER, detectedProviderType)
+      setProviderType(detectedProviderType)
     }
     setBaseUrlValue(value)
   }
@@ -932,6 +971,12 @@ export function TranslatorApplication() {
     setOperationToast(null)
   }
 
+  function setConnectionTestResult(state, message, details = "") {
+    setConnectionTestState(state)
+    setConnectionTestMessage(message)
+    setConnectionTestDetails(details)
+  }
+
   function createMergeSetFromItems(items, sourceLabel, source = "manual") {
     const normalizedItems = Array.from(items ?? []).map((item, index) => ({
       ...analyzeSubtitleImport(item, index),
@@ -942,6 +987,26 @@ export function TranslatorApplication() {
       source,
       sourceLabel,
       items: normalizedItems,
+    }
+  }
+
+  function primeRenameWorkspace(sourceItems, keepPanelVisibility = true) {
+    const suggestedBaseName = suggestRenameBaseName(sourceItems)
+    const sortedItems = sortSubtitleImports(sourceItems, "detected")
+    const totalItems = sortedItems.length
+
+    setRenameSourceItems(sourceItems)
+    setRenameBaseName(suggestedBaseName)
+    setRenameSortMode("detected")
+    setRenameRows(sortedItems.map((item, index) => ({
+      id: crypto.randomUUID(),
+      sourceItem: item,
+      order: index + 1,
+      newName: buildSuggestedRenameFileName(suggestedBaseName, index + 1, totalItems),
+    })))
+
+    if (!keepPanelVisibility) {
+      setShowRenamePanel(false)
     }
   }
 
@@ -1023,32 +1088,6 @@ export function TranslatorApplication() {
       order: index + 1,
       newName: buildSuggestedRenameFileName(baseName, index + 1, totalItems),
     })))
-  }
-
-  async function loadRenameFiles(files) {
-    if (!files?.length) {
-      return
-    }
-
-    try {
-      const extractedItems = await extractSubtitleImports(files)
-      const suggestedBaseName = suggestRenameBaseName(extractedItems)
-      setRenameSourceItems(extractedItems)
-      setRenameBaseName(suggestedBaseName)
-      setRenameSortMode("detected")
-      setShowRenamePanel(true)
-
-      const sortedItems = sortSubtitleImports(extractedItems, "detected")
-      const totalItems = sortedItems.length
-      setRenameRows(sortedItems.map((item, index) => ({
-        id: crypto.randomUUID(),
-        sourceItem: item,
-        order: index + 1,
-        newName: buildSuggestedRenameFileName(suggestedBaseName, index + 1, totalItems),
-      })))
-    } catch (error) {
-      alert(error?.message ?? error)
-    }
   }
 
   function applyRenameSortMode(nextSortMode) {
@@ -1329,6 +1368,7 @@ export function TranslatorApplication() {
       const nextJobs = importedSubtitles.map((importedSubtitle) => createSubtitleJob(importedSubtitle))
       const firstJob = nextJobs[0]
 
+      primeRenameWorkspace(importedSubtitles, false)
       setSubtitleJobs(nextJobs)
       setSelectedJobId(firstJob.id)
       setActiveJobId(null)
@@ -1381,43 +1421,123 @@ export function TranslatorApplication() {
     showCompletionNotification(title, message)
   }
 
-  async function testOllamaConnection() {
-    const baseUrl = (baseUrlValue?.trim() || DefaultOllamaBaseUrl).replace(/\/+$/, "")
+  async function testProviderConnection() {
+    const defaults = getProviderDefaults(providerType)
+    const baseUrl = normalizeBaseUrl(baseUrlValue || defaults.baseUrl)
     const normalizedApiValue = APIvalue?.trim() ?? ""
-    const isLocalOllamaConnection = baseUrl.includes("localhost:11434")
-    const shouldSkipAuthorizationHeader = isLocalOllamaConnection && normalizedApiValue.toLowerCase() === "ollama"
+
+    if (!baseUrl) {
+      alert("Set a base URL before testing the connection.")
+      return
+    }
+
+    if (!normalizedApiValue) {
+      alert("Enter an API key before testing the connection.")
+      return
+    }
+
     rememberModelValue(model)
     setIsTestingConnection(true)
-    setConnectionTestState("testing")
-    setConnectionTestMessage(`Testing ${baseUrl} ...`)
+    setConnectionTestResult("testing", `Testing ${baseUrl} ...`, "")
 
     try {
+      if (providerType === ProviderTypes.gemini) {
+        const modelToTest = model?.trim() || DefaultGeminiModel
+        const requestBody = {
+          model: modelToTest,
+          messages: [
+            {
+              role: "user",
+              content: "Reply exactly with: Gemini API OK",
+            },
+          ],
+          temperature: 0,
+          max_tokens: 32,
+          stream: false,
+        }
+
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${normalizedApiValue}`,
+          },
+          body: JSON.stringify(requestBody),
+        })
+        const responseText = await response.text()
+        let data = null
+        try {
+          data = responseText ? JSON.parse(responseText) : null
+        } catch {
+          data = { raw: responseText }
+        }
+
+        if (!response.ok) {
+          const requestError = new Error(data?.error?.message ?? data?.message ?? data?.raw ?? `HTTP ${response.status}`)
+          requestError.details = JSON.stringify({
+            request: requestBody,
+            response: data,
+            status: response.status,
+          }, null, 2)
+          throw requestError
+        }
+
+        const replyText = data?.choices?.[0]?.message?.content ?? ""
+        setConnectionTestResult(
+          "success",
+          `Connected. ${modelToTest} replied successfully via the Gemini OpenAI-compatible API.`,
+          JSON.stringify({
+            request: requestBody,
+            response: data,
+            replyText,
+          }, null, 2)
+        )
+        return
+      }
+
+      const isLocalOllamaConnection = baseUrl.includes("localhost:11434")
+      const shouldSkipAuthorizationHeader = isLocalOllamaConnection && normalizedApiValue.toLowerCase() === "ollama"
       const response = await fetch(`${baseUrl}/models`, {
         headers: normalizedApiValue && !shouldSkipAuthorizationHeader ? { Authorization: `Bearer ${normalizedApiValue}` } : undefined,
       })
-      const data = await response.json().catch(() => null)
+      const responseText = await response.text()
+      let data = null
+      try {
+        data = responseText ? JSON.parse(responseText) : null
+      } catch {
+        data = { raw: responseText }
+      }
 
       if (!response.ok) {
-        throw new Error(data?.error?.message ?? data?.message ?? `HTTP ${response.status}`)
+        const requestError = new Error(data?.error?.message ?? data?.message ?? data?.raw ?? `HTTP ${response.status}`)
+        requestError.details = JSON.stringify({
+          response: data,
+          status: response.status,
+        }, null, 2)
+        throw requestError
       }
 
       const models = Array.isArray(data?.data) ? data.data : []
       const hasSelectedModel = models.some(item => item?.id === model)
-      setConnectionTestState("success")
-      setConnectionTestMessage(
+      setConnectionTestResult(
+        "success",
         hasSelectedModel
-          ? `Connected. ${model} is available in Ollama.`
-          : `Connected, but ${model} is not installed in Ollama. Install it with: ollama pull ${model}. Ollama currently exposed ${models.length} model(s).`
+          ? `Connected. ${model} is available.`
+          : `Connected, but ${model} is not exposed by this provider. The endpoint returned ${models.length} model(s).`,
+        JSON.stringify(data, null, 2)
       )
     } catch (error) {
-      setConnectionTestState("error")
       const rawMessage = error?.message ?? String(error)
+      const isLocalOllamaConnection = baseUrl.includes("localhost:11434")
       const likelyOllamaCorsFailure = isGitHubPages && isLocalOllamaConnection && rawMessage === "Failed to fetch"
 
-      setConnectionTestMessage(
+      setConnectionTestResult(
+        "error",
         likelyOllamaCorsFailure
           ? `Failed to fetch. Ollama is likely rejecting the browser origin. On this PC set OLLAMA_ORIGINS=${siteOrigin}, restart Ollama, then try again.`
           : rawMessage
+        ,
+        error?.details ?? rawMessage
       )
     } finally {
       setIsTestingConnection(false)
@@ -1670,6 +1790,18 @@ export function TranslatorApplication() {
 
   const currentJob = subtitleJobs.find((job) => job.id === selectedJobId) ?? subtitleJobs[0] ?? null
   const activeJob = subtitleJobs.find((job) => job.id === activeJobId) ?? null
+  const providerDefaults = getProviderDefaults(providerType)
+  const effectiveBaseUrl = baseUrlValue ?? providerDefaults.baseUrl ?? ""
+  const providerDisplayName = providerType === ProviderTypes.gemini
+    ? "Gemini"
+    : providerType === ProviderTypes.ollama
+      ? "Ollama"
+      : "OpenAI-compatible"
+  const connectionTestButtonLabel = providerType === ProviderTypes.gemini
+    ? "Test Gemini API"
+    : providerType === ProviderTypes.ollama
+      ? "Test Ollama Connection"
+      : "Test Connection"
   const defaultMergePrimarySet = currentJob ? createMergeSetFromItems([{
     archivePath: currentJob.name,
     displayName: currentJob.name,
@@ -1809,18 +1941,50 @@ export function TranslatorApplication() {
                       </CardBody>
                     </Card>
                   )}
+                  <div className='flex flex-wrap items-end gap-2 w-full'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      color={providerType === ProviderTypes.ollama ? "secondary" : "default"}
+                      variant={providerType === ProviderTypes.ollama ? "solid" : "flat"}
+                      onClick={() => setProviderTypeValue(ProviderTypes.ollama)}
+                    >
+                      Ollama
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      color={providerType === ProviderTypes.gemini ? "secondary" : "default"}
+                      variant={providerType === ProviderTypes.gemini ? "solid" : "flat"}
+                      onClick={() => setProviderTypeValue(ProviderTypes.gemini)}
+                    >
+                      Gemini
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      color={providerType === ProviderTypes.custom ? "secondary" : "default"}
+                      variant={providerType === ProviderTypes.custom ? "solid" : "flat"}
+                      onClick={() => setProviderTypeValue(ProviderTypes.custom)}
+                    >
+                      Custom
+                    </Button>
+                    <p className='text-xs text-default-500'>
+                      Provider preset: <span className='font-semibold text-foreground'>{providerDisplayName}</span>
+                    </p>
+                  </div>
+
                   <div className='flex flex-wrap md:flex-nowrap w-full gap-4'>
                     <Input
                       className="w-full md:w-6/12"
                       size='sm'
-                      // autoFocus={true}
                       value={APIvalue}
                       onValueChange={(value) => setAPIKey(value)}
                       isRequired
                       autoComplete='off'
-                      label="OpenAI API Key"
+                      label={providerType === ProviderTypes.gemini ? "Gemini API Key" : "API Key"}
                       variant="flat"
-                      description='Stored locally in browser. Use "ollama" for local Ollama.'
+                      description={`${providerDefaults.apiKeyHint} Stored locally in browser.`}
                       endContent={
                         <button className="focus:outline-none" type="button" onClick={toggleAPIInputVisibility}>
                           {isAPIInputVisible ? (
@@ -1836,14 +2000,30 @@ export function TranslatorApplication() {
                       className='w-full md:w-6/12'
                       size='sm'
                       type="text"
-                      label="OpenAI Base Url"
-                      placeholder={DefaultOllamaBaseUrl}
+                      label="Provider Base URL"
+                      placeholder={providerDefaults.baseUrl || DefaultOllamaBaseUrl}
                       autoComplete='on'
-                      value={baseUrlValue ?? ""}
+                      value={effectiveBaseUrl}
                       onValueChange={setBaseUrl}
-                      description={`For local Ollama: ${DefaultOllamaBaseUrl}`}
+                      description={providerType === ProviderTypes.gemini
+                        ? `Official Gemini OpenAI-compatible endpoint: ${DefaultGeminiBaseUrl}`
+                        : providerType === ProviderTypes.ollama
+                          ? `For local Ollama: ${DefaultOllamaBaseUrl}`
+                          : "Enter any OpenAI-compatible base URL."}
                     />
                   </div>
+
+                  {providerType === ProviderTypes.gemini && (
+                    <Card shadow="sm" className="w-full border border-secondary-200 bg-secondary-50">
+                      <CardBody className="gap-2 text-sm">
+                        <p><b>Gemini quick setup</b></p>
+                        <p>API Key: use a Gemini API key from Google AI Studio.</p>
+                        <p>Base URL: <code>{DefaultGeminiBaseUrl}</code></p>
+                        <p>Suggested model: <code>{DefaultGeminiModel}</code></p>
+                        <p>The test button uses Gemini's OpenAI-compatible endpoint, so it checks the same compatibility layer the translator uses.</p>
+                      </CardBody>
+                    </Card>
+                  )}
 
                   {showOllamaCorsHint && (
                     <p className="w-full text-xs text-warning-700">
@@ -1856,10 +2036,10 @@ export function TranslatorApplication() {
                       type='button'
                       color="secondary"
                       variant="flat"
-                      onClick={testOllamaConnection}
+                      onClick={testProviderConnection}
                       isLoading={isTestingConnection}
                     >
-                      Test Ollama Connection
+                      {connectionTestButtonLabel}
                     </Button>
                     {connectionTestMessage && (
                       <p className={`text-sm ${connectionTestState === "error" ? "text-danger" : connectionTestState === "success" ? "text-success" : "text-default-500"}`}>
@@ -1867,6 +2047,15 @@ export function TranslatorApplication() {
                       </p>
                     )}
                   </div>
+
+                  {connectionTestDetails && (
+                    <div className='w-full rounded-2xl border border-default-200 bg-default-50 px-4 py-3'>
+                      <p className='text-xs font-semibold uppercase tracking-[0.14em] text-default-500'>Connection Details</p>
+                      <pre className='mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-xs text-default-700'>
+                        {connectionTestDetails}
+                      </pre>
+                    </div>
+                  )}
 
                   <div className='flex w-full gap-4'>
                     <Input
@@ -2085,14 +2274,6 @@ export function TranslatorApplication() {
             multiple
             onFilesSelect={handleImportFiles}
             buttonProps={{ isDisabled: translatorRunningState }}
-          />
-          <FileUploadButton
-            label={"Rename SRT / ZIP"}
-            accept=".srt,.zip"
-            inputId="rename-srt-input"
-            multiple
-            onFilesSelect={loadRenameFiles}
-            buttonProps={{ variant: "flat", isDisabled: translatorRunningState }}
           />
           {renameRows.length > 0 && (
             <Button variant="light" onClick={() => setShowRenamePanel((value) => !value)}>
@@ -2401,7 +2582,7 @@ export function TranslatorApplication() {
                   <div className='min-w-0 flex-1'>
                     <p className='text-base font-semibold'>Batch Rename</p>
                     <p className='text-sm text-default-500'>
-                      Load one `.srt`, many `.srt`, or a `.zip` with `.srt` files, adjust the order or names, and download a single `.srt` or a `.zip` automatically.
+                      Uses the subtitle files from the main Import action. Adjust the order or names here, then download a single `.srt` or a `.zip` automatically.
                     </p>
                   </div>
                   <div className='flex gap-2'>
