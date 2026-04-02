@@ -1,15 +1,18 @@
 "use client"
 import React, { startTransition, useDeferredValue, useEffect, useRef, useState } from 'react'
 import { Button, Input, Card, Textarea, Slider, Switch, CardHeader, CardBody, Divider, Popover, PopoverTrigger, PopoverContent, Autocomplete, AutocompleteItem } from "@nextui-org/react";
+import JSZip from "jszip"
 
 import { EyeSlashFilledIcon } from './EyeSlashFilledIcon';
 import { EyeFilledIcon } from './EyeFilledIcon';
 
 import { FileUploadButton } from '@/components/FileUploadButton';
 import { SubtitleCard } from '@/components/SubtitleCard';
-import { appendFileNameSuffix, buildCombinedSrtFileName, buildTranslatedSrtFileName, downloadString } from '@/utils/download';
+import { appendFileNameSuffix, buildCombinedSrtFileName, buildTranslatedSrtArchivePath, buildTranslatedSrtFileName, downloadBlob, downloadString } from '@/utils/download';
 import { sampleSrt } from '@/data/sample';
 import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
+import { playCompletionSound, ensureCompletionNotificationPermission, primeCompletionAudio, showCompletionNotification } from '@/utils/completionAlerts';
+import { extractSubtitleImports, getPathLeaf } from '@/utils/subtitleBatch';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -491,7 +494,113 @@ function SubtitleEditorTable({
   )
 }
 
+function createSubtitleJob(importedSubtitle) {
+  const parsedSubtitles = subtitleParser.fromSrt(importedSubtitle.text ?? "")
+  if (parsedSubtitles.length === 0) {
+    throw new Error(`Failed to parse "${importedSubtitle.displayName ?? importedSubtitle.archivePath ?? "subtitle"}" as SRT.`)
+  }
+
+  const normalizedInputText = buildSrtFromParsedSubtitles(parsedSubtitles)
+  const normalizedInputRows = buildSubtitleEditorRows(normalizedInputText)
+
+  return {
+    id: crypto.randomUUID(),
+    name: importedSubtitle.displayName ?? getPathLeaf(importedSubtitle.archivePath, "subtitle.srt"),
+    archivePath: importedSubtitle.archivePath ?? importedSubtitle.displayName ?? "subtitle.srt",
+    sourceLabel: importedSubtitle.sourceLabel ?? "",
+    inputText: normalizedInputText,
+    inputAppliedRows: normalizedInputRows,
+    inputEditorRows: normalizedInputRows,
+    inputs: parsedSubtitles.map((subtitle) => subtitle.text),
+    outputText: "",
+    outputAppliedRows: [],
+    outputEditorRows: [],
+    outputs: [],
+    status: "ready",
+    errorMessage: "",
+    completedLines: 0,
+    totalLines: parsedSubtitles.length,
+  }
+}
+
+function buildInitialSubtitleJob() {
+  return createSubtitleJob({
+    archivePath: "sample.srt",
+    displayName: "sample.srt",
+    sourceLabel: "Sample",
+    text: sampleSrt,
+  })
+}
+
+function getSubtitleJobStatusLabel(status) {
+  switch (status) {
+    case "running":
+      return "Running"
+    case "queued":
+      return "Queued"
+    case "completed":
+      return "Done"
+    case "failed":
+      return "Failed"
+    case "stopped":
+      return "Stopped"
+    default:
+      return "Ready"
+  }
+}
+
+function getSubtitleJobStatusClasses(status) {
+  switch (status) {
+    case "running":
+      return "bg-primary-100 text-primary-700"
+    case "queued":
+      return "bg-secondary-100 text-secondary-700"
+    case "completed":
+      return "bg-success-100 text-success-700"
+    case "failed":
+      return "bg-danger-100 text-danger-700"
+    case "stopped":
+      return "bg-warning-100 text-warning-700"
+    default:
+      return "bg-default-100 text-default-600"
+  }
+}
+
+function getSubtitleJobSourceCaption(job) {
+  if (!job) {
+    return ""
+  }
+
+  if (!job.sourceLabel) {
+    return job.archivePath || job.name
+  }
+
+  return `${job.sourceLabel} / ${job.archivePath}`
+}
+
+function buildBatchExportFileName(language) {
+  const normalizedLanguage = `${language ?? ""}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+
+  if (!normalizedLanguage) {
+    return "translated_subtitles.zip"
+  }
+
+  return `translated_subtitles_${normalizedLanguage}.zip`
+}
+
 export function TranslatorApplication() {
+  const initialSubtitleJobRef = useRef(null)
+  if (!initialSubtitleJobRef.current) {
+    initialSubtitleJobRef.current = buildInitialSubtitleJob()
+  }
+
+  const initialSubtitleJob = initialSubtitleJobRef.current
+
   // Translator Configuration
   const [APIvalue, setAPIValue] = useState("")
   const [baseUrlValue, setBaseUrlValue] = useState(undefined)
@@ -514,24 +623,28 @@ export function TranslatorApplication() {
   const toggleAPIInputVisibility = () => setIsAPIInputVisible(!isAPIInputVisible)
 
   // Translator State
-  const [srtInputText, setSrtInputText] = useState(sampleSrt)
+  const [subtitleJobs, setSubtitleJobs] = useState(() => [initialSubtitleJob])
+  const [selectedJobId, setSelectedJobId] = useState(() => initialSubtitleJob.id)
+  const [activeJobId, setActiveJobId] = useState(null)
+  const [srtInputText, setSrtInputText] = useState(initialSubtitleJob.inputText)
   const [srtOutputText, setSrtOutputText] = useState("")
-  const [inputAppliedRows, setInputAppliedRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
-  const [inputEditorRows, setInputEditorRows] = useState(() => buildSubtitleEditorRows(sampleSrt))
+  const [inputAppliedRows, setInputAppliedRows] = useState(() => initialSubtitleJob.inputAppliedRows)
+  const [inputEditorRows, setInputEditorRows] = useState(() => initialSubtitleJob.inputEditorRows)
   const [outputAppliedRows, setOutputAppliedRows] = useState([])
   const [outputEditorRows, setOutputEditorRows] = useState([])
-  const [inputs, setInputs] = useState(subtitleParser.fromSrt(sampleSrt).map(x => x.text))
+  const [inputs, setInputs] = useState(initialSubtitleJob.inputs)
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
-  const [importedSubtitleFileName, setImportedSubtitleFileName] = useState("")
-  const [mergePrimarySubtitle, setMergePrimarySubtitle] = useState(null)
-  const [mergeSecondarySubtitle, setMergeSecondarySubtitle] = useState(null)
+  const [importedSubtitleFileName, setImportedSubtitleFileName] = useState(initialSubtitleJob.name)
+  const [manualMergePrimarySubtitle, setManualMergePrimarySubtitle] = useState(null)
+  const [manualMergeSecondarySubtitle, setManualMergeSecondarySubtitle] = useState(null)
   const [keepMergeLanguageTag, setKeepMergeLanguageTag] = useState(false)
-  const [mergeStatusMessage, setMergeStatusMessage] = useState("")
+  const [operationToast, setOperationToast] = useState(null)
   const [translatorRunningState, setTranslatorRunningState] = useState(false)
   /** @type {React.RefObject<Translator>} */
   const translatorRef = useRef(null)
   const translatorRunningRef = useRef(false)
+  const completionAudioContextRef = useRef(null)
 
   // Translator Stats
   const [usageInformation, setUsageInformation] = useState(/** @type {typeof Translator.prototype.usage}*/(null))
@@ -591,16 +704,16 @@ export function TranslatorApplication() {
   }, [focusInstructionTitle, showInstructionLibrary])
 
   useEffect(() => {
-    if (!mergeStatusMessage) {
+    if (!operationToast) {
       return
     }
 
     const timeout = window.setTimeout(() => {
-      setMergeStatusMessage("")
+      setOperationToast(null)
     }, 5000)
 
     return () => window.clearTimeout(timeout)
-  }, [mergeStatusMessage])
+  }, [operationToast])
 
   useEffect(() => {
     if (translatorRunningState) {
@@ -617,6 +730,11 @@ export function TranslatorApplication() {
 
     setLinkedSubtitleScrollAnchor(null)
   }, [linkSubtitleScroll])
+
+  useEffect(() => {
+    setManualMergePrimarySubtitle(null)
+    setManualMergeSecondarySubtitle(null)
+  }, [selectedJobId])
 
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
@@ -741,8 +859,57 @@ export function TranslatorApplication() {
     setSystemInstructionDescription("")
   }
 
-  function dismissMergeToast() {
-    setMergeStatusMessage("")
+  function showOperationToast(title, message) {
+    setOperationToast({ title, message })
+  }
+
+  function dismissOperationToast() {
+    setOperationToast(null)
+  }
+
+  function updateSubtitleJob(jobId, updater) {
+    setSubtitleJobs((jobs) => jobs.map((job) => (
+      job.id === jobId ? updater(job) : job
+    )))
+  }
+
+  function syncEditorsWithSubtitleJob(job) {
+    if (!job) {
+      return
+    }
+
+    startTransition(() => {
+      setSrtInputText(job.inputText)
+      setInputAppliedRows(job.inputAppliedRows)
+      setInputEditorRows(job.inputEditorRows)
+      setInputs(job.inputs)
+      setSrtOutputText(job.outputText)
+      setOutputAppliedRows(job.outputAppliedRows)
+      setOutputEditorRows(job.outputEditorRows)
+      setOutput(job.outputs)
+    })
+
+    setImportedSubtitleFileName(job.name)
+    setLinkedSubtitleScrollAnchor(null)
+  }
+
+  function selectSubtitleJob(jobId) {
+    if (translatorRunningState) {
+      return
+    }
+
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before switching files.")
+      return
+    }
+
+    const nextJob = subtitleJobs.find((job) => job.id === jobId)
+    if (!nextJob) {
+      return
+    }
+
+    setSelectedJobId(jobId)
+    syncEditorsWithSubtitleJob(nextJob)
   }
 
   async function loadMergeSubtitleFile(file, slot) {
@@ -759,13 +926,13 @@ export function TranslatorApplication() {
       }
 
       if (slot === "primary") {
-        setMergePrimarySubtitle(nextSubtitle)
+        setManualMergePrimarySubtitle(nextSubtitle)
       }
       else {
-        setMergeSecondarySubtitle(nextSubtitle)
+        setManualMergeSecondarySubtitle(nextSubtitle)
       }
 
-      setMergeStatusMessage("")
+      dismissOperationToast()
     } catch (error) {
       alert(error?.message ?? error)
     }
@@ -780,29 +947,29 @@ export function TranslatorApplication() {
     }
 
     try {
+      let nextInputText = srtInputText
+      let nextInputRows = inputAppliedRows
+      let nextInputs = inputs
+      let nextOutputText = srtOutputText
+      let nextOutputRows = outputAppliedRows
+      let nextOutputs = outputs
+
       if (hasInputChanges) {
         const inputDraftText = buildSrtFromSubtitleEditorRows(inputEditorRows)
         const parsedInput = inputDraftText.trim() ? subtitleParser.fromSrt(inputDraftText) : []
         if (inputEditorRows.length > 0 && parsedInput.length !== inputEditorRows.length) {
           throw new Error("Input subtitles are not valid SRT. Fix them before applying changes.")
         }
-        const normalizedInputText = buildSrtFromParsedSubtitles(parsedInput)
-        const normalizedInputRows = buildSubtitleEditorRows(normalizedInputText)
+        nextInputText = buildSrtFromParsedSubtitles(parsedInput)
+        nextInputRows = buildSubtitleEditorRows(nextInputText)
+        nextInputs = parsedInput.map(item => item.text)
 
         startTransition(() => {
-          setSrtInputText(normalizedInputText)
-          setInputAppliedRows(normalizedInputRows)
-          setInputEditorRows(normalizedInputRows)
-          setInputs(parsedInput.map(item => item.text))
+          setSrtInputText(nextInputText)
+          setInputAppliedRows(nextInputRows)
+          setInputEditorRows(nextInputRows)
+          setInputs(nextInputs)
         })
-
-        if (mergePrimarySubtitle?.source !== "manual") {
-          setMergePrimarySubtitle({
-            name: importedSubtitleFileName || "source.srt",
-            text: normalizedInputText,
-            source: "imported",
-          })
-        }
       }
 
       if (hasOutputChanges) {
@@ -811,24 +978,33 @@ export function TranslatorApplication() {
         if (outputEditorRows.length > 0 && parsedOutput.length !== outputEditorRows.length) {
           throw new Error("Output subtitles are not valid SRT. Fix them before applying changes.")
         }
-        const normalizedOutputText = buildSrtFromParsedSubtitles(parsedOutput)
-        const normalizedOutputRows = buildSubtitleEditorRows(normalizedOutputText)
+        nextOutputText = buildSrtFromParsedSubtitles(parsedOutput)
+        nextOutputRows = buildSubtitleEditorRows(nextOutputText)
+        nextOutputs = parsedOutput.map(item => item.text)
 
         startTransition(() => {
-          setSrtOutputText(normalizedOutputText)
-          setOutputAppliedRows(normalizedOutputRows)
-          setOutputEditorRows(normalizedOutputRows)
-          setOutput(parsedOutput.map(item => item.text))
+          setSrtOutputText(nextOutputText)
+          setOutputAppliedRows(nextOutputRows)
+          setOutputEditorRows(nextOutputRows)
+          setOutput(nextOutputs)
         })
-
-        if (mergeSecondarySubtitle?.source !== "manual") {
-          setMergeSecondarySubtitle(normalizedOutputText.trim() ? {
-            name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
-            text: normalizedOutputText,
-            source: "generated",
-          } : null)
-        }
       }
+
+      updateSubtitleJob(selectedJobId, (job) => ({
+        ...job,
+        inputText: nextInputText,
+        inputAppliedRows: nextInputRows,
+        inputEditorRows: nextInputRows,
+        inputs: nextInputs,
+        totalLines: nextInputs.length,
+        outputText: nextOutputText,
+        outputAppliedRows: nextOutputRows,
+        outputEditorRows: nextOutputRows,
+        outputs: nextOutputs,
+        completedLines: nextOutputs.length,
+        status: nextOutputText.trim() ? job.status : "ready",
+        errorMessage: "",
+      }))
     } catch (error) {
       alert(error?.message ?? error)
     }
@@ -867,7 +1043,7 @@ export function TranslatorApplication() {
       : removeREngTag(buildCombinedSrtText(combinedSubtitles))
 
     downloadString(combinedSrtText, "text/plain", combinedFileName)
-    setMergeStatusMessage(`Downloaded ${combinedFileName}`)
+    showOperationToast("Merge complete", `Downloaded ${combinedFileName}`)
   }
 
   function saveSystemInstructionPreset() {
@@ -928,6 +1104,73 @@ export function TranslatorApplication() {
     setHideOllamaPagesHint(true)
   }
 
+  async function handleImportFiles(files) {
+    if (translatorRunningState) {
+      return
+    }
+
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before importing another batch.")
+      return
+    }
+
+    try {
+      const importedSubtitles = await extractSubtitleImports(files)
+      const nextJobs = importedSubtitles.map((importedSubtitle) => createSubtitleJob(importedSubtitle))
+      const firstJob = nextJobs[0]
+
+      setSubtitleJobs(nextJobs)
+      setSelectedJobId(firstJob.id)
+      setActiveJobId(null)
+      setOutput([])
+      setStreamOutput("")
+      setUsageInformation(null)
+      setRPMInformation(0)
+      dismissOperationToast()
+      syncEditorsWithSubtitleJob(firstJob)
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
+  async function exportTranslatedBatch() {
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before exporting.")
+      return
+    }
+
+    const translatedJobs = subtitleJobs.filter((job) => job.outputText.trim())
+    if (translatedJobs.length === 0) {
+      alert("Translate at least one subtitle file before exporting the batch.")
+      return
+    }
+
+    try {
+      const zipFile = new JSZip()
+      translatedJobs.forEach((job) => {
+        zipFile.file(buildTranslatedSrtArchivePath(job.archivePath || job.name, toLanguage), job.outputText)
+      })
+      const zipBlob = await zipFile.generateAsync({ type: "blob" })
+      const zipFileName = buildBatchExportFileName(toLanguage)
+
+      downloadBlob(zipBlob, zipFileName)
+      showOperationToast("Batch export ready", `Downloaded ${translatedJobs.length} translated subtitle file(s) as ${zipFileName}`)
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
+  function announceTranslationBatchCompletion(completedJobs, failedJobs, totalJobs) {
+    const title = failedJobs > 0 ? "Translation finished with warnings" : "Translation complete"
+    const message = failedJobs > 0
+      ? `Processed ${totalJobs} file(s): ${completedJobs} completed and ${failedJobs} failed.`
+      : `Processed ${completedJobs} subtitle file(s) successfully.`
+
+    showOperationToast(title, message)
+    playCompletionSound(completionAudioContextRef.current)
+    showCompletionNotification(title, message)
+  }
+
   async function testOllamaConnection() {
     const baseUrl = (baseUrlValue?.trim() || DefaultOllamaBaseUrl).replace(/\/+$/, "")
     const normalizedApiValue = APIvalue?.trim() ?? ""
@@ -971,30 +1214,32 @@ export function TranslatorApplication() {
     }
   }
 
-  async function generate(e) {
-    e.preventDefault()
-    if (hasPendingSubtitleEdits) {
-      alert("Apply subtitle changes before starting the translation.")
-      return
-    }
-    rememberModelValue(model)
-    setTranslatorRunningState(true)
-    console.log("[User Interface]", "Begin Generation")
-    translatorRunningRef.current = true
+  async function translateSubtitleJob(jobSnapshot) {
     let currentStream = ""
-    const outputWorkingProgress = subtitleParser.fromSrt(srtInputText)
+    const outputWorkingProgress = subtitleParser.fromSrt(jobSnapshot.inputText)
     const currentOutputs = []
-    const initialOutputRows = outputWorkingProgress.map((subtitle) => buildOutputEditorRow(subtitle))
-    setOutput([])
+    const workingOutputRows = outputWorkingProgress.map((subtitle) => buildOutputEditorRow(subtitle))
+    const jobInProgress = {
+      ...jobSnapshot,
+      outputText: "",
+      outputAppliedRows: workingOutputRows.slice(),
+      outputEditorRows: workingOutputRows.slice(),
+      outputs: [],
+      status: "running",
+      errorMessage: "",
+      completedLines: 0,
+    }
+
+    setSelectedJobId(jobSnapshot.id)
+    setActiveJobId(jobSnapshot.id)
+    syncEditorsWithSubtitleJob(jobInProgress)
     setUsageInformation(null)
-    setSrtOutputText("")
-    setOutputAppliedRows(initialOutputRows)
-    setOutputEditorRows(initialOutputRows)
-    console.log("OPENAI_BASE_URL", baseUrlValue)
+    setRPMInformation(0)
+    setStreamOutput("")
+    updateSubtitleJob(jobSnapshot.id, () => jobInProgress)
+
     const openai = createOpenAIClient(APIvalue, true, baseUrlValue)
-
     const coolerChatGPTAPI = new CooldownContext(rateLimit, 60000, "ChatGPTAPI")
-
     const TranslatorImplementation = useStructuredMode ? TranslatorStructuredArray : Translator
 
     translatorRef.current = new TranslatorImplementation({ from: fromLanguage, to: toLanguage }, {
@@ -1028,7 +1273,7 @@ export function TranslatorApplication() {
       }
     }, {
       useModerator: false,
-      batchSizes: batchSizes, //[10, 50],
+      batchSizes: batchSizes,
       createChatCompletionRequest: {
         model: model,
         temperature: temperature,
@@ -1041,17 +1286,18 @@ export function TranslatorApplication() {
     }
 
     try {
-      setStreamOutput("")
-      for await (const output of translatorRef.current.translateLines(inputs)) {
+      for await (const output of translatorRef.current.translateLines(jobSnapshot.inputs)) {
         if (!translatorRunningRef.current) {
-          console.error("[User Interface]", "Aborted")
           break
         }
+
         const srtEntry = outputWorkingProgress[output.index - 1]
         const cleanedTransform = sanitizeTranslatedSubtitleLine(output.finalTransform, srtEntry?.text ?? "")
         currentOutputs.push(cleanedTransform)
         srtEntry.text = cleanedTransform
         const nextOutputRow = buildOutputEditorRow(srtEntry, cleanedTransform)
+        workingOutputRows[output.index - 1] = nextOutputRow
+
         setOutput([...currentOutputs])
         setOutputAppliedRows((rows) => {
           const nextRows = rows.slice()
@@ -1065,40 +1311,167 @@ export function TranslatorApplication() {
         })
         setUsageInformation(translatorRef.current.usage)
         setRPMInformation(translatorRef.current.services.cooler?.rate)
+
+        updateSubtitleJob(jobSnapshot.id, (job) => ({
+          ...job,
+          outputs: [...currentOutputs],
+          outputAppliedRows: workingOutputRows.slice(),
+          outputEditorRows: workingOutputRows.slice(),
+          completedLines: currentOutputs.length,
+          status: "running",
+        }))
       }
-      console.log({ sourceInputWorkingCopy: outputWorkingProgress })
+
+      if (!translatorRunningRef.current) {
+        updateSubtitleJob(jobSnapshot.id, (job) => ({
+          ...job,
+          status: "stopped",
+          completedLines: currentOutputs.length,
+        }))
+        return "stopped"
+      }
+
       const translatedSrt = buildSrtFromParsedSubtitles(outputWorkingProgress)
       const nextOutputRows = buildSubtitleEditorRows(translatedSrt)
+
       startTransition(() => {
         setSrtOutputText(translatedSrt)
         setOutputAppliedRows(nextOutputRows)
         setOutputEditorRows(nextOutputRows)
+        setOutput([...currentOutputs])
       })
-      setMergeSecondarySubtitle({
-        name: buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage),
-        text: translatedSrt,
-        source: "generated",
-      })
-      setMergeStatusMessage("")
+
+      updateSubtitleJob(jobSnapshot.id, (job) => ({
+        ...job,
+        outputText: translatedSrt,
+        outputAppliedRows: nextOutputRows,
+        outputEditorRows: nextOutputRows,
+        outputs: [...currentOutputs],
+        completedLines: currentOutputs.length,
+        status: "completed",
+        errorMessage: "",
+      }))
+
+      return "completed"
     } catch (error) {
+      if (!translatorRunningRef.current || translatorRef.current?.aborted) {
+        updateSubtitleJob(jobSnapshot.id, (job) => ({
+          ...job,
+          status: "stopped",
+          completedLines: currentOutputs.length,
+        }))
+        return "stopped"
+      }
+
+      const errorMessage = error?.message ?? String(error)
       console.error(error)
-      alert(error?.message ?? error)
+      updateSubtitleJob(jobSnapshot.id, (job) => ({
+        ...job,
+        status: "failed",
+        errorMessage,
+        completedLines: currentOutputs.length,
+      }))
+      return "failed"
+    } finally {
+      translatorRef.current = null
+      setStreamOutput("")
     }
-    translatorRunningRef.current = false
-    translatorRef.current = null
-    setTranslatorRunningState(false)
+  }
+
+  async function generate(e) {
+    e.preventDefault()
+    if (hasPendingSubtitleEdits) {
+      alert("Apply subtitle changes before starting the translation.")
+      return
+    }
+
+    if (subtitleJobs.length === 0) {
+      alert("Import at least one subtitle file before starting.")
+      return
+    }
+
+    rememberModelValue(model)
+    completionAudioContextRef.current = await primeCompletionAudio(completionAudioContextRef.current).catch(() => null)
+    await ensureCompletionNotificationPermission().catch(() => "denied")
+
+    const jobsToTranslate = subtitleJobs.map((job) => ({ ...job }))
+
+    setTranslatorRunningState(true)
+    setShowTranslationProgressPanel(true)
+    translatorRunningRef.current = true
+    setUsageInformation(null)
+    setRPMInformation(0)
+    dismissOperationToast()
+    setSubtitleJobs((jobs) => jobs.map((job) => ({
+      ...job,
+      status: "queued",
+      errorMessage: "",
+      outputText: "",
+      outputAppliedRows: [],
+      outputEditorRows: [],
+      outputs: [],
+      completedLines: 0,
+    })))
+
+    let completedJobs = 0
+    let failedJobs = 0
+    let stopped = false
+
+    try {
+      for (const jobSnapshot of jobsToTranslate) {
+        const result = await translateSubtitleJob(jobSnapshot)
+
+        if (result === "stopped") {
+          stopped = true
+          break
+        }
+
+        if (result === "completed") {
+          completedJobs += 1
+        }
+        else if (result === "failed") {
+          failedJobs += 1
+        }
+      }
+    } finally {
+      translatorRunningRef.current = false
+      translatorRef.current = null
+      setActiveJobId(null)
+      setTranslatorRunningState(false)
+    }
+
+    if (stopped) {
+      setSubtitleJobs((jobs) => jobs.map((job) => (
+        job.status === "queued" ? { ...job, status: "ready" } : job
+      )))
+      showOperationToast("Translation stopped", "Batch translation was stopped before finishing.")
+      return
+    }
+
+    announceTranslationBatchCompletion(completedJobs, failedJobs, jobsToTranslate.length)
   }
 
   async function stopGeneration() {
-    console.error("[User Interface]", "Aborting")
     if (translatorRef.current) {
       translatorRunningRef.current = false
       translatorRef.current.abort()
     }
   }
 
-  const translatedExportFileName = buildTranslatedSrtFileName(importedSubtitleFileName, toLanguage)
-  const baseCombinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || importedSubtitleFileName, fromLanguage, toLanguage)
+  const currentJob = subtitleJobs.find((job) => job.id === selectedJobId) ?? subtitleJobs[0] ?? null
+  const activeJob = subtitleJobs.find((job) => job.id === activeJobId) ?? null
+  const mergePrimarySubtitle = manualMergePrimarySubtitle ?? (currentJob ? {
+    name: currentJob.name,
+    text: currentJob.inputText,
+    source: "imported",
+  } : null)
+  const mergeSecondarySubtitle = manualMergeSecondarySubtitle ?? (currentJob?.outputText?.trim() ? {
+    name: buildTranslatedSrtFileName(currentJob.name, toLanguage),
+    text: currentJob.outputText,
+    source: "generated",
+  } : null)
+  const translatedExportFileName = buildTranslatedSrtFileName(currentJob?.name || importedSubtitleFileName, toLanguage)
+  const baseCombinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || currentJob?.name || importedSubtitleFileName, fromLanguage, toLanguage)
   const combinedExportFileName = keepMergeLanguageTag
     ? baseCombinedExportFileName
     : appendFileNameSuffix(baseCombinedExportFileName, "no_rENG")
@@ -1111,8 +1484,17 @@ export function TranslatorApplication() {
   const hasPendingInputEdits = serializeSubtitleEditorRows(inputEditorRows) !== serializeSubtitleEditorRows(inputAppliedRows)
   const hasPendingOutputEdits = serializeSubtitleEditorRows(outputEditorRows) !== serializeSubtitleEditorRows(outputAppliedRows)
   const hasPendingSubtitleEdits = hasPendingInputEdits || hasPendingOutputEdits
-  const translationCompletedCount = outputs.length
-  const translationTotalCount = inputs.length
+  const translationCompletedCount = activeJob?.completedLines ?? currentJob?.completedLines ?? outputs.length
+  const translationTotalCount = activeJob?.totalLines ?? currentJob?.totalLines ?? inputs.length
+  const totalJobsCount = subtitleJobs.length
+  const completedJobsCount = subtitleJobs.filter((job) => job.status === "completed").length
+  const failedJobsCount = subtitleJobs.filter((job) => job.status === "failed").length
+  const translatedJobsCount = subtitleJobs.filter((job) => job.outputText.trim()).length
+  const processedLineCount = subtitleJobs.reduce((sum, job) => sum + job.completedLines, 0)
+  const totalLineCount = subtitleJobs.reduce((sum, job) => sum + job.totalLines, 0)
+  const batchProgressPercent = totalJobsCount > 0 ? Math.min(100, (completedJobsCount / totalJobsCount) * 100) : 0
+  const lineProgressPercent = totalLineCount > 0 ? Math.min(100, (processedLineCount / totalLineCount) * 100) : 0
+  const activeJobIndex = activeJob ? subtitleJobs.findIndex((job) => job.id === activeJob.id) : -1
 
   function handleLinkedSubtitleScrollAnchorChange(nextAnchor) {
     setLinkedSubtitleScrollAnchor((currentAnchor) => {
@@ -1471,37 +1853,16 @@ export function TranslatorApplication() {
         </form>
 
         <div className='w-full justify-between md:justify-center flex flex-wrap gap-1 sm:gap-4 mt-auto sticky top-0 backdrop-blur px-4 pt-4'>
-          <FileUploadButton label={"Import SRT"} accept=".srt" inputId="import-srt-input" onFileSelect={async (file) => {
-            // console.log("File", file);
-            try {
-              const text = await file.text()
-              const parsed = subtitleParser.fromSrt(text)
-              const nextInputRows = buildSubtitleEditorRows(text)
-              startTransition(() => {
-                setSrtInputText(text)
-                setInputAppliedRows(nextInputRows)
-                setInputEditorRows(nextInputRows)
-                setInputs(parsed.map(x => x.text))
-                setSrtOutputText("")
-                setOutputAppliedRows([])
-                setOutputEditorRows([])
-              })
-              setImportedSubtitleFileName(file.name)
-              setMergePrimarySubtitle({
-                name: file.name,
-                text,
-                source: "imported",
-              })
-              setMergeSecondarySubtitle(null)
-              setMergeStatusMessage("")
-              setOutput([])
-              setStreamOutput("")
-            } catch (error) {
-              alert(error.message ?? error)
-            }
-          }} />
+          <FileUploadButton
+            label={"Import SRT / ZIP"}
+            accept=".srt,.zip"
+            inputId="import-srt-input"
+            multiple
+            onFilesSelect={handleImportFiles}
+            buttonProps={{ isDisabled: translatorRunningState }}
+          />
           {!translatorRunningState && (
-            <Button type='submit' form="translator-config-form" color="primary" isDisabled={!APIvalue || translatorRunningState}>
+            <Button type='submit' form="translator-config-form" color="primary" isDisabled={!APIvalue || translatorRunningState || totalJobsCount === 0}>
               Start
             </Button>
           )}
@@ -1512,7 +1873,7 @@ export function TranslatorApplication() {
             </Button>
           )}
 
-          <Button color="primary" onClick={() => {
+          <Button color="primary" isDisabled={!srtOutputText.trim()} onClick={() => {
             if (hasPendingSubtitleEdits) {
               alert("Apply subtitle changes before exporting.")
               return
@@ -1521,6 +1882,11 @@ export function TranslatorApplication() {
           }}>
             Export SRT
           </Button>
+          {totalJobsCount > 1 && (
+            <Button color="primary" variant="flat" isDisabled={translatedJobsCount === 0} onClick={exportTranslatedBatch}>
+              Export Batch ZIP
+            </Button>
+          )}
           {usageInformation && (
             <Popover placement="bottom">
               <PopoverTrigger>
@@ -1582,7 +1948,7 @@ export function TranslatorApplication() {
                     <div>
                       <p className='text-sm font-semibold'>Merge top and bottom subtitles</p>
                       <p className='text-xs text-default-500'>
-                        The current import is used as the top subtitle and the latest translated SRT is used as the bottom subtitle by default.
+                        The currently selected subtitle file is used as the top subtitle and its latest translated SRT is used as the bottom subtitle by default.
                         You can replace either one here with files from your computer.
                       </p>
                     </div>
@@ -1643,6 +2009,93 @@ export function TranslatorApplication() {
         </div>
 
         <div className='px-4 mt-4'>
+          <Card shadow="none" className='border'>
+            <CardBody className='gap-4'>
+              <div className='flex flex-wrap items-start justify-between gap-4'>
+                <div className='min-w-0 flex-1'>
+                  <p className='text-base font-semibold'>Subtitle Queue</p>
+                  <p className='text-sm text-default-500'>
+                    {totalJobsCount} file(s) loaded. The app translates them internally one by one and keeps each result available for review and export.
+                  </p>
+                </div>
+
+                <div className='grid min-w-[18rem] gap-3 rounded-2xl border border-default-200 bg-default-50 px-4 py-3'>
+                  <div>
+                    <div className='flex items-center justify-between gap-3 text-xs uppercase tracking-[0.14em] text-default-500'>
+                      <span>Files</span>
+                      <span>{completedJobsCount}/{totalJobsCount}</span>
+                    </div>
+                    <div className='mt-2 h-2 rounded-full bg-default-200'>
+                      <div className='h-2 rounded-full bg-primary transition-all' style={{ width: `${batchProgressPercent}%` }}></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className='flex items-center justify-between gap-3 text-xs uppercase tracking-[0.14em] text-default-500'>
+                      <span>Lines</span>
+                      <span>{processedLineCount}/{totalLineCount}</span>
+                    </div>
+                    <div className='mt-2 h-2 rounded-full bg-default-200'>
+                      <div className='h-2 rounded-full bg-secondary transition-all' style={{ width: `${lineProgressPercent}%` }}></div>
+                    </div>
+                  </div>
+
+                  {failedJobsCount > 0 && (
+                    <p className='text-xs text-danger-600'>{failedJobsCount} file(s) finished with errors.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className='grid gap-3 lg:grid-cols-2'>
+                {subtitleJobs.map((job, index) => {
+                  const isSelected = job.id === selectedJobId
+                  const isActive = job.id === activeJobId
+                  const jobPercent = job.totalLines > 0 ? Math.min(100, (job.completedLines / job.totalLines) * 100) : 0
+
+                  return (
+                    <button
+                      key={job.id}
+                      type='button'
+                      className={`rounded-2xl border px-4 py-4 text-left transition ${isSelected ? "border-primary bg-primary-50/60 shadow-sm" : "border-default-200 bg-content1"} ${translatorRunningState ? "cursor-default" : "hover:border-default-300 hover:bg-default-50"}`}
+                      onClick={() => selectSubtitleJob(job.id)}
+                      disabled={translatorRunningState}
+                    >
+                      <div className='flex items-start justify-between gap-3'>
+                        <div className='min-w-0 flex-1'>
+                          <p className='truncate text-sm font-semibold text-foreground'>
+                            {index + 1}. {job.name}
+                          </p>
+                          <p className='mt-1 break-all text-xs text-default-500'>
+                            {getSubtitleJobSourceCaption(job)}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getSubtitleJobStatusClasses(job.status)}`}>
+                          {isActive ? "Running now" : getSubtitleJobStatusLabel(job.status)}
+                        </span>
+                      </div>
+
+                      <div className='mt-4'>
+                        <div className='flex items-center justify-between gap-3 text-xs text-default-500'>
+                          <span>{job.completedLines}/{job.totalLines} lines</span>
+                          <span>{Math.round(jobPercent)}%</span>
+                        </div>
+                        <div className='mt-2 h-2 rounded-full bg-default-200'>
+                          <div className={`h-2 rounded-full transition-all ${job.status === "failed" ? "bg-danger" : job.status === "completed" ? "bg-success" : isActive ? "bg-primary" : "bg-default-400"}`} style={{ width: `${jobPercent}%` }}></div>
+                        </div>
+                      </div>
+
+                      {job.errorMessage && (
+                        <p className='mt-3 text-xs text-danger-600'>{job.errorMessage}</p>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        <div className='px-4 mt-4'>
           <div className='flex items-center justify-end'>
             <div className='flex items-center gap-3 rounded-2xl border border-default-200 bg-content1 px-4 py-3 shadow-sm'>
               <Switch
@@ -1661,7 +2114,7 @@ export function TranslatorApplication() {
 
         <div className="lg:flex lg:gap-4 px-4 mt-4">
           <div className="lg:w-1/2">
-            <SubtitleCard label={"Input"}>
+            <SubtitleCard label={`Input${currentJob ? ` - ${currentJob.name}` : ""}`}>
               <SubtitleEditorTable
                 tableId="input"
                 description="Editable subtitle rows. Apply changes before translating."
@@ -1678,7 +2131,7 @@ export function TranslatorApplication() {
           </div>
 
           <div className="lg:w-1/2">
-            <SubtitleCard label={"Output"}>
+            <SubtitleCard label={`Output${currentJob ? ` - ${currentJob.name}` : ""}`}>
               <SubtitleEditorTable
                 tableId="output"
                 description="Editable translated rows. Applied changes are used for export and merge."
@@ -1695,21 +2148,21 @@ export function TranslatorApplication() {
           </div>
         </div>
       </div>
-      {mergeStatusMessage && (
+      {operationToast && (
         <div className='fixed bottom-4 right-4 z-50 max-w-md'>
           <Card shadow="lg" className='border border-success-200 bg-success-50'>
             <CardBody className='flex flex-row items-start gap-3 p-3'>
               <div className='min-w-0 flex-1'>
-                <p className='text-sm font-semibold text-success-700'>Merge complete</p>
-                <p className='text-sm text-success-700 break-all'>{mergeStatusMessage}</p>
+                <p className='text-sm font-semibold text-success-700'>{operationToast.title}</p>
+                <p className='text-sm text-success-700 break-all'>{operationToast.message}</p>
               </div>
               <Button
                 isIconOnly
                 size='sm'
                 variant='light'
                 className='text-success-700'
-                aria-label="Close merge notification"
-                onClick={dismissMergeToast}
+                aria-label="Close operation notification"
+                onClick={dismissOperationToast}
               >
                 <CloseIcon />
               </Button>
@@ -1731,9 +2184,11 @@ export function TranslatorApplication() {
                   <span className='relative inline-flex h-3 w-3 rounded-full bg-primary'></span>
                 </span>
                 <div className='min-w-0'>
-                  <p className='text-sm font-semibold text-foreground'>Translating {translationCompletedCount}/{translationTotalCount}</p>
+                  <p className='text-sm font-semibold text-foreground'>
+                    File {activeJobIndex + 1}/{totalJobsCount}: {activeJob?.name ?? currentJob?.name ?? "subtitle"}
+                  </p>
                   <p className='truncate text-xs text-default-500'>
-                    {showTranslationProgressPanel ? "Hide live progress" : "Show live progress"}
+                    {translationCompletedCount}/{translationTotalCount} lines translated
                   </p>
                 </div>
               </div>
@@ -1743,7 +2198,30 @@ export function TranslatorApplication() {
             {showTranslationProgressPanel && (
               <>
                 <Divider />
-                <CardBody className='p-0'>
+                <CardBody className='gap-3 p-4'>
+                  <div>
+                    <div className='flex items-center justify-between gap-3 text-xs uppercase tracking-[0.14em] text-default-500'>
+                      <span>Batch</span>
+                      <span>{completedJobsCount}/{totalJobsCount} files</span>
+                    </div>
+                    <div className='mt-2 h-2 rounded-full bg-default-200'>
+                      <div className='h-2 rounded-full bg-primary transition-all' style={{ width: `${batchProgressPercent}%` }}></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className='flex items-center justify-between gap-3 text-xs uppercase tracking-[0.14em] text-default-500'>
+                      <span>Current file</span>
+                      <span>{translationCompletedCount}/{translationTotalCount} lines</span>
+                    </div>
+                    <div className='mt-2 h-2 rounded-full bg-default-200'>
+                      <div className='h-2 rounded-full bg-secondary transition-all' style={{ width: `${translationTotalCount > 0 ? Math.min(100, (translationCompletedCount / translationTotalCount) * 100) : 0}%` }}></div>
+                    </div>
+                    <p className='mt-2 break-all text-xs text-default-500'>
+                      {activeJob ? getSubtitleJobSourceCaption(activeJob) : "Preparing the next subtitle file..."}
+                    </p>
+                  </div>
+
                   <pre className='max-h-72 overflow-auto whitespace-pre-wrap px-4 py-3 text-sm text-default-600'>
                     {streamOutput || "Waiting for streamed output..."}
                   </pre>

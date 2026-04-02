@@ -1,15 +1,18 @@
-export function downloadString(text, fileType, fileName) {
-  var blob = new Blob([text], { type: fileType });
-
+export function downloadBlob(blob, fileName) {
   var a = document.createElement('a');
   a.download = fileName;
   a.href = URL.createObjectURL(blob);
-  a.dataset.downloadurl = [fileType, a.download, a.href].join(':');
+  a.dataset.downloadurl = [blob.type || "application/octet-stream", a.download, a.href].join(':');
   a.style.display = "none";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+}
+
+export function downloadString(text, fileType, fileName) {
+  var blob = new Blob([text], { type: fileType });
+  downloadBlob(blob, fileName)
 }
 
 function slugifyFilePart(value, fallback) {
@@ -24,7 +27,7 @@ function slugifyFilePart(value, fallback) {
 }
 
 export function getFileBaseName(fileName, fallbackBaseName = "export") {
-  const trimmedName = (fileName ?? "").trim()
+  const trimmedName = `${fileName ?? ""}`.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.trim() ?? ""
   if (!trimmedName) {
     return fallbackBaseName
   }
@@ -41,6 +44,19 @@ export function buildTranslatedSrtFileName(fileName, language) {
   const baseName = getFileBaseName(fileName, "export")
   const languageSuffix = slugifyFilePart(language, "translated")
   return `${baseName}_${languageSuffix}.srt`
+}
+
+export function buildTranslatedSrtArchivePath(fileName, language) {
+  const normalizedFileName = `${fileName ?? ""}`.replace(/\\/g, "/").trim()
+  const pathParts = normalizedFileName.split("/").filter(Boolean)
+  const fileLeaf = pathParts.pop() ?? "export.srt"
+  const translatedFileName = buildTranslatedSrtFileName(fileLeaf, language)
+
+  if (pathParts.length === 0) {
+    return translatedFileName
+  }
+
+  return `${pathParts.join("/")}/${translatedFileName}`
 }
 
 export function buildCombinedSrtFileName(fileName, primaryLanguage, secondaryLanguage) {
