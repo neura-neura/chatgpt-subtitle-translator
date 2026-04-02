@@ -9,6 +9,7 @@ import { EyeFilledIcon } from './EyeFilledIcon';
 import { FileUploadButton } from '@/components/FileUploadButton';
 import { SubtitleCard } from '@/components/SubtitleCard';
 import { appendFileNameSuffix, buildCombinedSrtFileName, buildTranslatedSrtArchivePath, buildTranslatedSrtFileName, downloadBlob, downloadString } from '@/utils/download';
+import { createGeminiBrowserClient } from '@/utils/geminiOpenAICompat';
 import { sampleSrt } from '@/data/sample';
 import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
 import { playCompletionSound, ensureCompletionNotificationPermission, primeCompletionAudio, showCompletionNotification } from '@/utils/completionAlerts';
@@ -820,6 +821,10 @@ export function TranslatorApplication() {
     localStorage.setItem(API_PROVIDER, value)
     setProviderType(value)
 
+    if (value === ProviderTypes.gemini && useStructuredMode) {
+      setUseStructuredMode(false)
+    }
+
     if (!applyDefaults) {
       return
     }
@@ -868,6 +873,12 @@ export function TranslatorApplication() {
     }
     setBaseUrlValue(value)
   }
+
+  useEffect(() => {
+    if (providerType === ProviderTypes.gemini && useStructuredMode) {
+      setUseStructuredMode(false)
+    }
+  }, [providerType, useStructuredMode])
 
   function setToLanguageValue(value) {
     if (!value) {
@@ -1568,9 +1579,13 @@ export function TranslatorApplication() {
     setStreamOutput("")
     updateSubtitleJob(jobSnapshot.id, () => jobInProgress)
 
-    const openai = createOpenAIClient(APIvalue, true, baseUrlValue)
+    const isGeminiProvider = providerType === ProviderTypes.gemini
+    const translatorUsesStructuredMode = !isGeminiProvider && useStructuredMode
+    const openai = isGeminiProvider
+      ? createGeminiBrowserClient(APIvalue, baseUrlValue ?? DefaultGeminiBaseUrl)
+      : createOpenAIClient(APIvalue, true, baseUrlValue)
     const coolerChatGPTAPI = new CooldownContext(rateLimit, 60000, "ChatGPTAPI")
-    const TranslatorImplementation = useStructuredMode ? TranslatorStructuredArray : Translator
+    const TranslatorImplementation = translatorUsesStructuredMode ? TranslatorStructuredArray : Translator
 
     translatorRef.current = new TranslatorImplementation({ from: fromLanguage, to: toLanguage }, {
       openai,
@@ -2021,6 +2036,7 @@ export function TranslatorApplication() {
                         <p>Base URL: <code>{DefaultGeminiBaseUrl}</code></p>
                         <p>Suggested model: <code>{DefaultGeminiModel}</code></p>
                         <p>The test button uses Gemini's OpenAI-compatible endpoint, so it checks the same compatibility layer the translator uses.</p>
+                        <p>Batch translation uses a browser `fetch` compatibility client for Gemini so the real subtitle queue follows the same provider path more reliably than the generic SDK route.</p>
                         <p className='text-warning-700'>This app runs in your browser. The key is remembered locally here, but browser-based apps are still a client-side environment, so use a key with the minimum scope you are comfortable exposing to this machine.</p>
                       </CardBody>
                     </Card>
@@ -2207,11 +2223,16 @@ export function TranslatorApplication() {
                         size='sm'
                         isSelected={useStructuredMode}
                         onValueChange={setUseStructuredMode}
+                        isDisabled={providerType === ProviderTypes.gemini}
                       >
                       </Switch>
                       <div className="flex flex-col place-content-center gap-1">
                         <p className="text-small">Use Structured Mode</p>
-                        {baseUrlValue && (
+                        {providerType === ProviderTypes.gemini ? (
+                          <p className="text-tiny text-default-400">
+                            Gemini keeps this off automatically because the subtitle queue runs through the OpenAI-compatible fetch path.
+                          </p>
+                        ) : baseUrlValue && (
                           <p className="text-tiny text-default-400">
                             Base URL is set, disable structured mode for compatibility.
                           </p>
