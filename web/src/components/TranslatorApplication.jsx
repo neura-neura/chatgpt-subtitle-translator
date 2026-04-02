@@ -12,7 +12,7 @@ import { appendFileNameSuffix, buildCombinedSrtFileName, buildTranslatedSrtArchi
 import { sampleSrt } from '@/data/sample';
 import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
 import { playCompletionSound, ensureCompletionNotificationPermission, primeCompletionAudio, showCompletionNotification } from '@/utils/completionAlerts';
-import { extractSubtitleImports, getPathLeaf } from '@/utils/subtitleBatch';
+import { analyzeSubtitleImport, buildSuggestedRenameFileName, extractSubtitleImports, getPathLeaf, pairSubtitleImports, sortSubtitleImports, suggestRenameBaseName } from '@/utils/subtitleBatch';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -494,6 +494,62 @@ function SubtitleEditorTable({
   )
 }
 
+function ProgressiveList({
+  items,
+  renderItem,
+  emptyMessage,
+  initialCount = 24,
+  batchSize = 24,
+  className = "",
+  resetKey,
+}) {
+  const sentinelRef = useRef(null)
+  const [visibleCount, setVisibleCount] = useState(initialCount)
+
+  useEffect(() => {
+    setVisibleCount(initialCount)
+  }, [initialCount, resetKey])
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel || visibleCount >= items.length) {
+      return
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries[0]?.isIntersecting) {
+        return
+      }
+
+      setVisibleCount((currentCount) => Math.min(items.length, currentCount + batchSize))
+    }, {
+      rootMargin: "200px",
+    })
+
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [batchSize, items.length, visibleCount])
+
+  if (items.length === 0) {
+    return (
+      <p className='rounded-2xl border border-dashed border-default-200 px-4 py-6 text-sm text-default-500'>
+        {emptyMessage}
+      </p>
+    )
+  }
+
+  return (
+    <div className={className}>
+      {items.slice(0, visibleCount).map((item, index) => renderItem(item, index))}
+      {visibleCount < items.length && (
+        <div ref={sentinelRef} className='py-3 text-center text-xs text-default-400'>
+          Loading more items...
+        </div>
+      )}
+    </div>
+  )
+}
+
 function createSubtitleJob(importedSubtitle) {
   const parsedSubtitles = subtitleParser.fromSrt(importedSubtitle.text ?? "")
   if (parsedSubtitles.length === 0) {
@@ -593,6 +649,15 @@ function buildBatchExportFileName(language) {
   return `translated_subtitles_${normalizedLanguage}.zip`
 }
 
+function normalizeRenamedSubtitleFileName(fileName) {
+  const trimmedName = `${fileName ?? ""}`.trim()
+  if (!trimmedName) {
+    return ""
+  }
+
+  return /\.srt$/i.test(trimmedName) ? trimmedName : `${trimmedName}.srt`
+}
+
 export function TranslatorApplication() {
   const initialSubtitleJobRef = useRef(null)
   if (!initialSubtitleJobRef.current) {
@@ -636,11 +701,16 @@ export function TranslatorApplication() {
   const [outputs, setOutput] = useState([])
   const [streamOutput, setStreamOutput] = useState("")
   const [importedSubtitleFileName, setImportedSubtitleFileName] = useState(initialSubtitleJob.name)
-  const [manualMergePrimarySubtitle, setManualMergePrimarySubtitle] = useState(null)
-  const [manualMergeSecondarySubtitle, setManualMergeSecondarySubtitle] = useState(null)
+  const [mergePrimarySet, setMergePrimarySet] = useState(null)
+  const [mergeSecondarySet, setMergeSecondarySet] = useState(null)
   const [keepMergeLanguageTag, setKeepMergeLanguageTag] = useState(false)
   const [operationToast, setOperationToast] = useState(null)
   const [translatorRunningState, setTranslatorRunningState] = useState(false)
+  const [showRenamePanel, setShowRenamePanel] = useState(false)
+  const [renameSourceItems, setRenameSourceItems] = useState([])
+  const [renameBaseName, setRenameBaseName] = useState("episode")
+  const [renameSortMode, setRenameSortMode] = useState("detected")
+  const [renameRows, setRenameRows] = useState([])
   /** @type {React.RefObject<Translator>} */
   const translatorRef = useRef(null)
   const translatorRunningRef = useRef(false)
@@ -730,11 +800,6 @@ export function TranslatorApplication() {
 
     setLinkedSubtitleScrollAnchor(null)
   }, [linkSubtitleScroll])
-
-  useEffect(() => {
-    setManualMergePrimarySubtitle(null)
-    setManualMergeSecondarySubtitle(null)
-  }, [selectedJobId])
 
   const isGitHubPages = siteOrigin.includes("github.io")
   const showOllamaPagesHint = isGitHubPages && !hideOllamaPagesHint
@@ -867,6 +932,19 @@ export function TranslatorApplication() {
     setOperationToast(null)
   }
 
+  function createMergeSetFromItems(items, sourceLabel, source = "manual") {
+    const normalizedItems = Array.from(items ?? []).map((item, index) => ({
+      ...analyzeSubtitleImport(item, index),
+      text: item.text,
+    }))
+
+    return {
+      source,
+      sourceLabel,
+      items: normalizedItems,
+    }
+  }
+
   function updateSubtitleJob(jobId, updater) {
     setSubtitleJobs((jobs) => jobs.map((job) => (
       job.id === jobId ? updater(job) : job
@@ -912,27 +990,130 @@ export function TranslatorApplication() {
     syncEditorsWithSubtitleJob(nextJob)
   }
 
-  async function loadMergeSubtitleFile(file, slot) {
-    if (!file) {
+  async function loadMergeSubtitleFiles(files, slot) {
+    if (!files?.length) {
       return
     }
 
     try {
-      const fileText = await file.text()
-      const nextSubtitle = {
-        name: file.name,
-        text: fileText,
-        source: "manual",
-      }
+      const extractedItems = await extractSubtitleImports(files)
+      const sourceLabel = files.length === 1 ? files[0].name : `${files.length} selected files`
+      const nextSet = createMergeSetFromItems(extractedItems, sourceLabel)
 
       if (slot === "primary") {
-        setManualMergePrimarySubtitle(nextSubtitle)
+        setMergePrimarySet(nextSet)
       }
       else {
-        setManualMergeSecondarySubtitle(nextSubtitle)
+        setMergeSecondarySet(nextSet)
       }
 
       dismissOperationToast()
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
+  function rebuildRenameRows(sourceItems, sortMode = renameSortMode, baseName = renameBaseName) {
+    const sortedItems = sortSubtitleImports(sourceItems, sortMode)
+    const totalItems = sortedItems.length
+
+    setRenameRows(sortedItems.map((item, index) => ({
+      id: crypto.randomUUID(),
+      sourceItem: item,
+      order: index + 1,
+      newName: buildSuggestedRenameFileName(baseName, index + 1, totalItems),
+    })))
+  }
+
+  async function loadRenameFiles(files) {
+    if (!files?.length) {
+      return
+    }
+
+    try {
+      const extractedItems = await extractSubtitleImports(files)
+      const suggestedBaseName = suggestRenameBaseName(extractedItems)
+      setRenameSourceItems(extractedItems)
+      setRenameBaseName(suggestedBaseName)
+      setRenameSortMode("detected")
+      setShowRenamePanel(true)
+
+      const sortedItems = sortSubtitleImports(extractedItems, "detected")
+      const totalItems = sortedItems.length
+      setRenameRows(sortedItems.map((item, index) => ({
+        id: crypto.randomUUID(),
+        sourceItem: item,
+        order: index + 1,
+        newName: buildSuggestedRenameFileName(suggestedBaseName, index + 1, totalItems),
+      })))
+    } catch (error) {
+      alert(error?.message ?? error)
+    }
+  }
+
+  function applyRenameSortMode(nextSortMode) {
+    setRenameSortMode(nextSortMode)
+    rebuildRenameRows(renameSourceItems, nextSortMode, renameBaseName)
+  }
+
+  function autofillRenameNames() {
+    const sortedRows = renameRows
+      .slice()
+      .sort((left, right) => Number(left.order) - Number(right.order) || left.sourceItem.leafName.localeCompare(right.sourceItem.leafName, undefined, { numeric: true, sensitivity: "base" }))
+
+    const totalItems = sortedRows.length
+    const nameById = new Map(sortedRows.map((row, index) => [
+      row.id,
+      buildSuggestedRenameFileName(renameBaseName, index + 1, totalItems),
+    ]))
+
+    setRenameRows((rows) => rows.map((row) => ({
+      ...row,
+      newName: nameById.get(row.id) ?? row.newName,
+    })))
+  }
+
+  async function downloadRenamedFiles() {
+    if (renameRows.length === 0) {
+      alert("Load subtitle files before renaming.")
+      return
+    }
+
+    const normalizedRows = renameRows.map((row) => ({
+      ...row,
+      newName: normalizeRenamedSubtitleFileName(row.newName),
+      order: Number(row.order) || 0,
+    }))
+
+    if (normalizedRows.some((row) => !row.newName)) {
+      alert("Every renamed file needs a new name.")
+      return
+    }
+
+    if (new Set(normalizedRows.map((row) => row.newName.toLowerCase())).size !== normalizedRows.length) {
+      alert("Renamed files must have unique names.")
+      return
+    }
+
+    const orderedRows = normalizedRows
+      .slice()
+      .sort((left, right) => left.order - right.order || left.sourceItem.leafName.localeCompare(right.sourceItem.leafName, undefined, { numeric: true, sensitivity: "base" }))
+
+    try {
+      if (orderedRows.length === 1) {
+        downloadString(orderedRows[0].sourceItem.text, "text/plain", orderedRows[0].newName)
+        showOperationToast("Rename complete", `Downloaded ${orderedRows[0].newName}`)
+        return
+      }
+
+      const zipFile = new JSZip()
+      orderedRows.forEach((row) => {
+        zipFile.file(row.newName, row.sourceItem.text)
+      })
+      const zipBlob = await zipFile.generateAsync({ type: "blob" })
+      const zipFileName = `${renameBaseName || "renamed_subtitles"}_renamed.zip`
+      downloadBlob(zipBlob, zipFileName)
+      showOperationToast("Rename complete", `Downloaded ${orderedRows.length} renamed subtitle files as ${zipFileName}`)
     } catch (error) {
       alert(error?.message ?? error)
     }
@@ -1010,40 +1191,69 @@ export function TranslatorApplication() {
     }
   }
 
-  function combineAndDownloadSubtitles() {
+  async function combineAndDownloadSubtitles() {
     if (hasPendingSubtitleEdits) {
       alert("Apply subtitle changes before combining.")
       return
     }
 
-    if (!mergePrimarySubtitle || !mergeSecondarySubtitle) {
-      alert("Choose both subtitle files before combining.")
+    if (!activeMergePrimarySet || !activeMergeSecondarySet) {
+      alert("Choose both subtitle sets before combining.")
       return
     }
 
-    const primary = parseSubtitleText(mergePrimarySubtitle.name, mergePrimarySubtitle.text)
-    const secondary = parseSubtitleText(mergeSecondarySubtitle.name, mergeSecondarySubtitle.text)
-
-    if (!primary.subtitles.length) {
-      alert("Failed to parse the TOP subtitle.")
+    const mergePlan = pairSubtitleImports(activeMergePrimarySet.items, activeMergeSecondarySet.items)
+    if (!mergePlan.ok) {
+      alert(`${mergePlan.errorTitle}: ${mergePlan.errorMessage}`)
       return
     }
 
-    if (!secondary.subtitles.length) {
-      alert("Failed to parse the BOTTOM subtitle.")
-      return
+    try {
+      const mergedOutputs = []
+
+      for (const pair of mergePlan.pairs) {
+        const primary = parseSubtitleText(pair.primary.leafName, pair.primary.text)
+        const secondary = parseSubtitleText(pair.secondary.leafName, pair.secondary.text)
+
+        if (!primary.subtitles.length) {
+          throw new Error(`Failed to parse the TOP subtitle "${pair.primary.leafName}".`)
+        }
+
+        if (!secondary.subtitles.length) {
+          throw new Error(`Failed to parse the BOTTOM subtitle "${pair.secondary.leafName}".`)
+        }
+
+        const combinedSubtitles = combineSubtitles(primary.subtitles, secondary.subtitles, primary.format, "{\\rENG}", true)
+        const combinedFileName = keepMergeLanguageTag
+          ? buildCombinedSrtFileName(pair.primary.leafName, fromLanguage, toLanguage)
+          : appendFileNameSuffix(buildCombinedSrtFileName(pair.primary.leafName, fromLanguage, toLanguage), "no_rENG")
+        const combinedSrtText = keepMergeLanguageTag
+          ? buildCombinedSrtText(combinedSubtitles)
+          : removeREngTag(buildCombinedSrtText(combinedSubtitles))
+
+        mergedOutputs.push({
+          fileName: combinedFileName,
+          text: combinedSrtText,
+        })
+      }
+
+      if (mergedOutputs.length === 1) {
+        downloadString(mergedOutputs[0].text, "text/plain", mergedOutputs[0].fileName)
+        showOperationToast("Merge complete", `Downloaded ${mergedOutputs[0].fileName}`)
+        return
+      }
+
+      const zipFile = new JSZip()
+      mergedOutputs.forEach((output) => {
+        zipFile.file(output.fileName, output.text)
+      })
+      const zipBlob = await zipFile.generateAsync({ type: "blob" })
+      const zipFileName = keepMergeLanguageTag ? "merged_bilingual_batch.zip" : "merged_bilingual_batch_no_rENG.zip"
+      downloadBlob(zipBlob, zipFileName)
+      showOperationToast("Merge complete", `Downloaded ${mergedOutputs.length} merged subtitle files as ${zipFileName}`)
+    } catch (error) {
+      alert(error?.message ?? error)
     }
-
-    const combinedSubtitles = combineSubtitles(primary.subtitles, secondary.subtitles, primary.format, "{\\rENG}", true)
-    const combinedFileName = keepMergeLanguageTag
-      ? buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage)
-      : appendFileNameSuffix(buildCombinedSrtFileName(mergePrimarySubtitle.name || importedSubtitleFileName, fromLanguage, toLanguage), "no_rENG")
-    const combinedSrtText = keepMergeLanguageTag
-      ? buildCombinedSrtText(combinedSubtitles)
-      : removeREngTag(buildCombinedSrtText(combinedSubtitles))
-
-    downloadString(combinedSrtText, "text/plain", combinedFileName)
-    showOperationToast("Merge complete", `Downloaded ${combinedFileName}`)
   }
 
   function saveSystemInstructionPreset() {
@@ -1460,26 +1670,37 @@ export function TranslatorApplication() {
 
   const currentJob = subtitleJobs.find((job) => job.id === selectedJobId) ?? subtitleJobs[0] ?? null
   const activeJob = subtitleJobs.find((job) => job.id === activeJobId) ?? null
-  const mergePrimarySubtitle = manualMergePrimarySubtitle ?? (currentJob ? {
-    name: currentJob.name,
+  const defaultMergePrimarySet = currentJob ? createMergeSetFromItems([{
+    archivePath: currentJob.name,
+    displayName: currentJob.name,
+    sourceLabel: "Current editor",
     text: currentJob.inputText,
-    source: "imported",
-  } : null)
-  const mergeSecondarySubtitle = manualMergeSecondarySubtitle ?? (currentJob?.outputText?.trim() ? {
-    name: buildTranslatedSrtFileName(currentJob.name, toLanguage),
+  }], "Current selected subtitle", "current") : null
+  const defaultMergeSecondarySet = currentJob?.outputText?.trim() ? createMergeSetFromItems([{
+    archivePath: buildTranslatedSrtFileName(currentJob.name, toLanguage),
+    displayName: buildTranslatedSrtFileName(currentJob.name, toLanguage),
+    sourceLabel: "Current translation",
     text: currentJob.outputText,
-    source: "generated",
-  } : null)
+  }], "Current translated subtitle", "generated") : null
+  const activeMergePrimarySet = mergePrimarySet ?? defaultMergePrimarySet
+  const activeMergeSecondarySet = mergeSecondarySet ?? defaultMergeSecondarySet
+  const mergePairingPlan = activeMergePrimarySet && activeMergeSecondarySet
+    ? pairSubtitleImports(activeMergePrimarySet.items, activeMergeSecondarySet.items)
+    : null
   const translatedExportFileName = buildTranslatedSrtFileName(currentJob?.name || importedSubtitleFileName, toLanguage)
-  const baseCombinedExportFileName = buildCombinedSrtFileName(mergePrimarySubtitle?.name || currentJob?.name || importedSubtitleFileName, fromLanguage, toLanguage)
+  const baseCombinedExportFileName = buildCombinedSrtFileName(activeMergePrimarySet?.items?.[0]?.leafName || currentJob?.name || importedSubtitleFileName, fromLanguage, toLanguage)
   const combinedExportFileName = keepMergeLanguageTag
     ? baseCombinedExportFileName
     : appendFileNameSuffix(baseCombinedExportFileName, "no_rENG")
-  const mergePrimaryLabel = mergePrimarySubtitle?.name ?? "Choose the top subtitle"
-  const mergeSecondaryLabel = mergeSecondarySubtitle?.source === "generated"
+  const mergePrimaryLabel = activeMergePrimarySet
+    ? `${activeMergePrimarySet.items.length} file(s) - ${activeMergePrimarySet.sourceLabel}`
+    : "Choose the top subtitle(s)"
+  const mergeSecondaryLabel = activeMergeSecondarySet?.source === "generated" && activeMergeSecondarySet.items.length === 1
     ? translatedExportFileName
-    : mergeSecondarySubtitle?.name ?? "Choose the bottom subtitle"
-  const canMergeSubtitles = Boolean(mergePrimarySubtitle?.text && mergeSecondarySubtitle?.text)
+    : activeMergeSecondarySet
+      ? `${activeMergeSecondarySet.items.length} file(s) - ${activeMergeSecondarySet.sourceLabel}`
+      : "Choose the bottom subtitle(s)"
+  const canMergeSubtitles = Boolean(mergePairingPlan?.ok)
   const modelOptions = [...DefaultModelOptions, ...recentModelOptions]
   const hasPendingInputEdits = serializeSubtitleEditorRows(inputEditorRows) !== serializeSubtitleEditorRows(inputAppliedRows)
   const hasPendingOutputEdits = serializeSubtitleEditorRows(outputEditorRows) !== serializeSubtitleEditorRows(outputAppliedRows)
@@ -1495,6 +1716,10 @@ export function TranslatorApplication() {
   const batchProgressPercent = totalJobsCount > 0 ? Math.min(100, (completedJobsCount / totalJobsCount) * 100) : 0
   const lineProgressPercent = totalLineCount > 0 ? Math.min(100, (processedLineCount / totalLineCount) * 100) : 0
   const activeJobIndex = activeJob ? subtitleJobs.findIndex((job) => job.id === activeJob.id) : -1
+  const renameDuplicateNames = new Set(renameRows
+    .map((row) => normalizeRenamedSubtitleFileName(row.newName).toLowerCase())
+    .filter(Boolean)
+    .filter((name, index, names) => names.indexOf(name) !== index))
 
   function handleLinkedSubtitleScrollAnchorChange(nextAnchor) {
     setLinkedSubtitleScrollAnchor((currentAnchor) => {
@@ -1861,6 +2086,19 @@ export function TranslatorApplication() {
             onFilesSelect={handleImportFiles}
             buttonProps={{ isDisabled: translatorRunningState }}
           />
+          <FileUploadButton
+            label={"Rename SRT / ZIP"}
+            accept=".srt,.zip"
+            inputId="rename-srt-input"
+            multiple
+            onFilesSelect={loadRenameFiles}
+            buttonProps={{ variant: "flat", isDisabled: translatorRunningState }}
+          />
+          {renameRows.length > 0 && (
+            <Button variant="light" onClick={() => setShowRenamePanel((value) => !value)}>
+              {showRenamePanel ? "Hide Rename Panel" : "Show Rename Panel"}
+            </Button>
+          )}
           {!translatorRunningState && (
             <Button type='submit' form="translator-config-form" color="primary" isDisabled={!APIvalue || translatorRunningState || totalJobsCount === 0}>
               Start
@@ -1949,7 +2187,7 @@ export function TranslatorApplication() {
                       <p className='text-sm font-semibold'>Merge top and bottom subtitles</p>
                       <p className='text-xs text-default-500'>
                         The currently selected subtitle file is used as the top subtitle and its latest translated SRT is used as the bottom subtitle by default.
-                        You can replace either one here with files from your computer.
+                        You can replace either side with one file, several `.srt`, or a `.zip` with `.srt` files.
                       </p>
                     </div>
 
@@ -1957,26 +2195,80 @@ export function TranslatorApplication() {
                       <div>
                         <p className='text-xs font-semibold text-default-600 mb-1'>Top subtitle</p>
                         <FileUploadButton
-                          label="Choose Top Subtitle"
-                          accept=".srt,.ass"
+                          label="Choose Top Subtitle(s)"
+                          accept=".srt,.zip"
                           inputId="merge-top-subtitle-input"
                           buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
-                          onFileSelect={(file) => loadMergeSubtitleFile(file, "primary")}
+                          multiple
+                          onFilesSelect={(files) => loadMergeSubtitleFiles(files, "primary")}
                         />
-                        <p className='text-xs text-default-500 mt-1 break-all'>{mergePrimaryLabel}</p>
+                        <div className='mt-1 flex items-center justify-between gap-2'>
+                          <p className='text-xs text-default-500 break-all'>{mergePrimaryLabel}</p>
+                          {mergePrimarySet && (
+                            <Button size='sm' variant='light' onClick={() => setMergePrimarySet(null)}>
+                              Use current
+                            </Button>
+                          )}
+                        </div>
                       </div>
 
                       <div>
                         <p className='text-xs font-semibold text-default-600 mb-1'>Bottom subtitle</p>
                         <FileUploadButton
-                          label="Choose Bottom Subtitle"
-                          accept=".srt,.ass"
+                          label="Choose Bottom Subtitle(s)"
+                          accept=".srt,.zip"
                           inputId="merge-bottom-subtitle-input"
                           buttonProps={{ color: "secondary", variant: "flat", className: "w-full" }}
-                          onFileSelect={(file) => loadMergeSubtitleFile(file, "secondary")}
+                          multiple
+                          onFilesSelect={(files) => loadMergeSubtitleFiles(files, "secondary")}
                         />
-                        <p className='text-xs text-default-500 mt-1 break-all'>{mergeSecondaryLabel}</p>
+                        <div className='mt-1 flex items-center justify-between gap-2'>
+                          <p className='text-xs text-default-500 break-all'>{mergeSecondaryLabel}</p>
+                          {mergeSecondarySet && (
+                            <Button size='sm' variant='light' onClick={() => setMergeSecondarySet(null)}>
+                              Use current
+                            </Button>
+                          )}
+                        </div>
                       </div>
+                    </div>
+
+                    <div className='rounded-xl border border-default-200 bg-default-50 px-3 py-3'>
+                      <p className='text-xs font-semibold uppercase tracking-[0.14em] text-default-500'>Pairing preview</p>
+                      {!activeMergePrimarySet || !activeMergeSecondarySet ? (
+                        <p className='mt-2 text-xs text-default-500'>
+                          Load both sides to preview the chapter pairing. If you leave the current selection active, the merge stays as a single-file merge.
+                        </p>
+                      ) : !mergePairingPlan?.ok ? (
+                        <>
+                          <p className='mt-2 text-sm font-semibold text-danger-600'>{mergePairingPlan?.errorTitle ?? "Unable to pair subtitles"}</p>
+                          <p className='mt-1 text-xs text-danger-600'>{mergePairingPlan?.errorMessage}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className='mt-2 text-xs text-default-500'>
+                            Matched by <span className='font-semibold text-foreground'>{mergePairingPlan.strategy}</span>. Review the pairs below before downloading.
+                          </p>
+                          <div className='mt-3 max-h-64 overflow-y-auto pr-1'>
+                            <ProgressiveList
+                              items={mergePairingPlan.pairs}
+                              initialCount={20}
+                              batchSize={20}
+                              resetKey={mergePairingPlan.pairs.map((pair) => `${pair.primary.archivePath}:${pair.secondary.archivePath}`).join("|")}
+                              emptyMessage="No merge pairs ready yet."
+                              className='grid gap-2'
+                              renderItem={(pair, pairIndex) => (
+                                <div key={`${pair.primary.archivePath}-${pair.secondary.archivePath}`} className='rounded-xl border border-default-200 bg-content1 px-3 py-3'>
+                                  <p className='text-xs font-semibold text-default-500'>Pair {pairIndex + 1}</p>
+                                  <p className='mt-1 break-all text-sm text-foreground'>{pair.primary.leafName}</p>
+                                  <p className='text-xs text-default-400'>matches with</p>
+                                  <p className='break-all text-sm text-foreground'>{pair.secondary.leafName}</p>
+                                </div>
+                              )}
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div className='flex gap-3 rounded-xl bg-default-50 px-3 py-3'>
@@ -1995,7 +2287,7 @@ export function TranslatorApplication() {
                     </div>
 
                     <div className='text-xs text-default-500'>
-                      Combined file name: <code>{combinedExportFileName}</code>
+                      Output: <code>{mergePairingPlan?.pairs?.length > 1 ? (keepMergeLanguageTag ? "merged_bilingual_batch.zip" : "merged_bilingual_batch_no_rENG.zip") : combinedExportFileName}</code>
                     </div>
                   </div>
                 </PopoverContent>
@@ -2046,8 +2338,14 @@ export function TranslatorApplication() {
                 </div>
               </div>
 
-              <div className='grid gap-3 lg:grid-cols-2'>
-                {subtitleJobs.map((job, index) => {
+              <ProgressiveList
+                items={subtitleJobs}
+                initialCount={24}
+                batchSize={24}
+                resetKey={subtitleJobs.map((job) => job.id).join("|")}
+                emptyMessage="No subtitle files loaded yet."
+                className='grid gap-3 lg:grid-cols-2'
+                renderItem={(job, index) => {
                   const isSelected = job.id === selectedJobId
                   const isActive = job.id === activeJobId
                   const jobPercent = job.totalLines > 0 ? Math.min(100, (job.completedLines / job.totalLines) * 100) : 0
@@ -2089,11 +2387,121 @@ export function TranslatorApplication() {
                       )}
                     </button>
                   )
-                })}
-              </div>
+                }}
+              />
             </CardBody>
           </Card>
         </div>
+
+        {showRenamePanel && (
+          <div className='px-4 mt-4'>
+            <Card shadow="none" className='border'>
+              <CardBody className='gap-4'>
+                <div className='flex flex-wrap items-start justify-between gap-3'>
+                  <div className='min-w-0 flex-1'>
+                    <p className='text-base font-semibold'>Batch Rename</p>
+                    <p className='text-sm text-default-500'>
+                      Load one `.srt`, many `.srt`, or a `.zip` with `.srt` files, adjust the order or names, and download a single `.srt` or a `.zip` automatically.
+                    </p>
+                  </div>
+                  <div className='flex gap-2'>
+                    <Button variant="flat" onClick={autofillRenameNames} isDisabled={renameRows.length === 0}>
+                      Autofill Names
+                    </Button>
+                    <Button color="primary" onClick={downloadRenamedFiles} isDisabled={renameRows.length === 0}>
+                      Download Renamed
+                    </Button>
+                    <Button variant="light" onClick={() => setShowRenamePanel(false)}>
+                      Hide
+                    </Button>
+                  </div>
+                </div>
+
+                <div className='flex flex-wrap gap-3'>
+                  <Input
+                    className='w-full md:w-80'
+                    size='sm'
+                    label="Base Name"
+                    value={renameBaseName}
+                    onValueChange={setRenameBaseName}
+                    description="Used when you click Autofill Names."
+                  />
+
+                  <div className='flex flex-wrap items-end gap-2'>
+                    <Button size='sm' variant={renameSortMode === "detected" ? "solid" : "flat"} color="secondary" onClick={() => applyRenameSortMode("detected")}>
+                      Sort by Episode
+                    </Button>
+                    <Button size='sm' variant={renameSortMode === "name" ? "solid" : "flat"} color="secondary" onClick={() => applyRenameSortMode("name")}>
+                      Sort A-Z
+                    </Button>
+                    <Button size='sm' variant={renameSortMode === "original" ? "solid" : "flat"} color="secondary" onClick={() => applyRenameSortMode("original")}>
+                      Keep Input Order
+                    </Button>
+                  </div>
+                </div>
+
+                {renameDuplicateNames.size > 0 && (
+                  <p className='text-sm text-danger-600'>
+                    Duplicate renamed files detected. Each new file name must be unique before downloading.
+                  </p>
+                )}
+
+                <ProgressiveList
+                  items={renameRows}
+                  initialCount={30}
+                  batchSize={30}
+                  resetKey={renameRows.map((row) => row.id).join("|")}
+                  emptyMessage="Load subtitle files to start the batch renamer."
+                  className='grid gap-3'
+                  renderItem={(row) => {
+                    const analyzedItem = analyzeSubtitleImport(row.sourceItem)
+                    const hasDuplicateName = renameDuplicateNames.has(`${row.newName ?? ""}`.trim().toLowerCase())
+
+                    return (
+                      <div key={row.id} className='rounded-2xl border border-default-200 bg-content1 px-4 py-4'>
+                        <div className='grid gap-3 md:grid-cols-[7rem_minmax(0,1fr)_minmax(0,1fr)] md:items-start'>
+                          <Input
+                            size='sm'
+                            type='number'
+                            min='1'
+                            label="Order"
+                            value={String(row.order)}
+                            onValueChange={(value) => setRenameRows((rows) => rows.map((currentRow) => currentRow.id === row.id ? { ...currentRow, order: Number(value) || 0 } : currentRow))}
+                          />
+
+                          <div className='rounded-xl border border-default-200 bg-default-50 px-3 py-3'>
+                            <p className='text-[11px] font-semibold uppercase tracking-[0.14em] text-default-500'>Old Name</p>
+                            <p className='mt-1 break-all text-sm font-medium text-foreground'>{analyzedItem.leafName}</p>
+                            <p className='mt-1 break-all text-xs text-default-500'>{analyzedItem.archivePath}</p>
+                          </div>
+
+                          <Input
+                            size='sm'
+                            label="New Name"
+                            value={row.newName}
+                            color={hasDuplicateName ? "danger" : "default"}
+                            isInvalid={hasDuplicateName}
+                            errorMessage={hasDuplicateName ? "Duplicate name" : ""}
+                            onValueChange={(value) => setRenameRows((rows) => rows.map((currentRow) => currentRow.id === row.id ? { ...currentRow, newName: value } : currentRow))}
+                          />
+                        </div>
+
+                        <div className='mt-3 flex flex-wrap gap-2 text-xs text-default-500'>
+                          {analyzedItem.numericKey && (
+                            <span className='rounded-full bg-default-100 px-2 py-1'>Episode key: {analyzedItem.numericKey}</span>
+                          )}
+                          {analyzedItem.tokenKey && (
+                            <span className='rounded-full bg-default-100 px-2 py-1'>Clean title: {analyzedItem.tokenKey}</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }}
+                />
+              </CardBody>
+            </Card>
+          </div>
+        )}
 
         <div className='px-4 mt-4'>
           <div className='flex items-center justify-end'>
