@@ -2021,6 +2021,7 @@ export function TranslatorApplication() {
                         <p>Base URL: <code>{DefaultGeminiBaseUrl}</code></p>
                         <p>Suggested model: <code>{DefaultGeminiModel}</code></p>
                         <p>The test button uses Gemini's OpenAI-compatible endpoint, so it checks the same compatibility layer the translator uses.</p>
+                        <p className='text-warning-700'>This app runs in your browser. The key is remembered locally here, but browser-based apps are still a client-side environment, so use a key with the minimum scope you are comfortable exposing to this machine.</p>
                       </CardBody>
                     </Card>
                   )}
