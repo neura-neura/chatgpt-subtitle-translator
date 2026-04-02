@@ -14,7 +14,7 @@ import { sampleSrt } from '@/data/sample';
 import { buildCombinedSrtText, combineSubtitles, parseSubtitleText, removeREngTag } from '@/utils/subtitleMerge';
 import { playCompletionSound, ensureCompletionNotificationPermission, primeCompletionAudio, showCompletionNotification } from '@/utils/completionAlerts';
 import { analyzeSubtitleImport, buildSuggestedRenameFileName, extractSubtitleImports, getPathLeaf, pairSubtitleImports, sortSubtitleImports, suggestRenameBaseName } from '@/utils/subtitleBatch';
-import { DefaultGeminiBaseUrl, DefaultGeminiModel, DefaultOllamaBaseUrl, ProviderTypes, detectProviderType, getProviderDefaults, normalizeBaseUrl } from '@/utils/providerConfig';
+import { DefaultGeminiBaseUrl, DefaultGeminiModel, DefaultOllamaBaseUrl, DefaultRateLimit, ProviderTypes, detectProviderType, getProviderDefaults, normalizeBaseUrl, normalizeRateLimit, shouldApplyRecommendedRateLimit } from '@/utils/providerConfig';
 
 import { Translator, TranslatorStructuredArray, subtitleParser, createOpenAIClient, CooldownContext } from "chatgpt-subtitle-translator"
 
@@ -197,6 +197,16 @@ function buildOutputEditorRow(subtitle, text = "") {
     text: normalizedText,
     hasEngTag,
   }
+}
+
+function formatProviderTranslationError(providerType, errorMessage, recommendedRateLimit) {
+  const normalizedMessage = `${errorMessage ?? ""}`.trim()
+
+  if (providerType === ProviderTypes.gemini && /\b429\b|rate limit/i.test(normalizedMessage)) {
+    return `Gemini rate limit reached (HTTP 429). Wait about a minute and try again with Rate Limit ${recommendedRateLimit} RPM or lower. Google applies Gemini quotas per project, so canceling and retrying still counts against the same minute window. Original error: ${normalizedMessage}`
+  }
+
+  return normalizedMessage || "Translation failed."
 }
 
 function getSubtitleEditorRowLineCount(row) {
@@ -680,7 +690,7 @@ export function TranslatorApplication() {
   const [temperature, setTemperature] = useState(DefaultTemperature)
   const [batchSizes, setBatchSizes] = useState([10, 50])
   const [useStructuredMode, setUseStructuredMode] = useState(false)
-  const [rateLimit, setRateLimit] = useState(60)
+  const [rateLimit, setRateLimit] = useState(DefaultRateLimit)
   const [systemInstructionTitle, setSystemInstructionTitle] = useState("")
   const [systemInstructionDescription, setSystemInstructionDescription] = useState("")
   const [savedSystemInstructions, setSavedSystemInstructions] = useState([])
@@ -717,6 +727,8 @@ export function TranslatorApplication() {
   /** @type {React.RefObject<Translator>} */
   const translatorRef = useRef(null)
   const translatorRunningRef = useRef(false)
+  const translationCooldownRef = useRef(null)
+  const translationCooldownKeyRef = useRef("")
   const completionAudioContextRef = useRef(null)
 
   // Translator Stats
@@ -735,11 +747,18 @@ export function TranslatorApplication() {
   // Persistent Data Restoration
   useEffect(() => {
     setAPIValue(localStorage.getItem(OPENAI_API_KEY) ?? "")
-    setRateLimit(Number(localStorage.getItem(RATE_LIMIT) ?? rateLimit))
     const restoredBaseUrl = localStorage.getItem(OPENAI_BASE_URL) ?? undefined
     setBaseUrlWithModerator(restoredBaseUrl)
     const restoredProviderType = localStorage.getItem(API_PROVIDER) ?? detectProviderType(restoredBaseUrl)
-    setProviderType(Object.values(ProviderTypes).includes(restoredProviderType) ? restoredProviderType : ProviderTypes.custom)
+    const normalizedProviderType = Object.values(ProviderTypes).includes(restoredProviderType) ? restoredProviderType : ProviderTypes.custom
+    setProviderType(normalizedProviderType)
+    const storedRateLimit = localStorage.getItem(RATE_LIMIT)
+    const parsedRateLimit = normalizeRateLimit(storedRateLimit, getProviderDefaults(normalizedProviderType).recommendedRateLimit ?? DefaultRateLimit)
+    const restoredRateLimit = shouldApplyRecommendedRateLimit(normalizedProviderType, storedRateLimit)
+      ? getProviderDefaults(normalizedProviderType).recommendedRateLimit
+      : parsedRateLimit
+    localStorage.setItem(RATE_LIMIT, String(restoredRateLimit))
+    setRateLimit(restoredRateLimit)
     setToLanguage(localStorage.getItem(TO_LANGUAGE) ?? "English")
     setSystemInstruction(localStorage.getItem(SYSTEM_INSTRUCTION) ?? "")
     setKeepMergeLanguageTag(localStorage.getItem(KEEP_MERGE_LANGUAGE_TAG) === "true")
@@ -839,6 +858,9 @@ export function TranslatorApplication() {
 
     if (value === ProviderTypes.gemini) {
       setModelValue(DefaultGeminiModel)
+      if (shouldApplyRecommendedRateLimit(value, rateLimit)) {
+        setRateLimitValue(String(defaults.recommendedRateLimit))
+      }
     }
     else if (value === ProviderTypes.ollama && (!model || model === DefaultGeminiModel)) {
       setModelValue(DefaultModel)
@@ -947,8 +969,20 @@ export function TranslatorApplication() {
    * @param {string} value
    */
   function setRateLimitValue(value) {
-    localStorage.setItem(RATE_LIMIT, value)
-    setRateLimit(Number(value))
+    const nextRateLimit = normalizeRateLimit(value, providerDefaults.recommendedRateLimit ?? DefaultRateLimit)
+    localStorage.setItem(RATE_LIMIT, String(nextRateLimit))
+    setRateLimit(nextRateLimit)
+  }
+
+  function getTranslatorCooldownContext() {
+    const cooldownKey = `${providerType}|${effectiveBaseUrl}|${rateLimit}`
+
+    if (!translationCooldownRef.current || translationCooldownKeyRef.current !== cooldownKey) {
+      translationCooldownRef.current = new CooldownContext(rateLimit, 60000, providerType === ProviderTypes.gemini ? "GeminiAPI" : "ChatGPTAPI")
+      translationCooldownKeyRef.current = cooldownKey
+    }
+
+    return translationCooldownRef.current
   }
 
   /**
@@ -1584,7 +1618,7 @@ export function TranslatorApplication() {
     const openai = isGeminiProvider
       ? createGeminiBrowserClient(APIvalue, baseUrlValue ?? DefaultGeminiBaseUrl)
       : createOpenAIClient(APIvalue, true, baseUrlValue)
-    const coolerChatGPTAPI = new CooldownContext(rateLimit, 60000, "ChatGPTAPI")
+    const coolerChatGPTAPI = getTranslatorCooldownContext()
     const TranslatorImplementation = translatorUsesStructuredMode ? TranslatorStructuredArray : Translator
 
     translatorRef.current = new TranslatorImplementation({ from: fromLanguage, to: toLanguage }, {
@@ -1708,7 +1742,11 @@ export function TranslatorApplication() {
         return "stopped"
       }
 
-      const errorMessage = error?.message ?? String(error)
+      const errorMessage = formatProviderTranslationError(
+        providerType,
+        error?.message ?? String(error),
+        providerDefaults.recommendedRateLimit ?? DefaultRateLimit
+      )
       console.error(error)
       updateSubtitleJob(jobSnapshot.id, (job) => ({
         ...job,
@@ -2035,8 +2073,10 @@ export function TranslatorApplication() {
                         <p>API Key: use a Gemini API key from Google AI Studio.</p>
                         <p>Base URL: <code>{DefaultGeminiBaseUrl}</code></p>
                         <p>Suggested model: <code>{DefaultGeminiModel}</code></p>
+                        <p>Recommended starting rate limit: <code>{providerDefaults.recommendedRateLimit} RPM</code>.</p>
                         <p>The test button uses Gemini's OpenAI-compatible endpoint, so it checks the same compatibility layer the translator uses.</p>
                         <p>Batch translation uses a browser `fetch` compatibility client for Gemini so the real subtitle queue follows the same provider path more reliably than the generic SDK route.</p>
+                        <p>Gemini quotas are applied per project, so stopping and immediately retrying can still hit the same minute window.</p>
                         <p className='text-warning-700'>This app runs in your browser. The key is remembered locally here, but browser-based apps are still a client-side environment, so use a key with the minimum scope you are comfortable exposing to this machine.</p>
                       </CardBody>
                     </Card>
@@ -2274,6 +2314,9 @@ export function TranslatorApplication() {
                         value={rateLimit.toString()}
                         onValueChange={(value) => setRateLimitValue(value)}
                         autoComplete='on'
+                        description={providerType === ProviderTypes.gemini
+                          ? `Start around ${providerDefaults.recommendedRateLimit} RPM for Gemini. Canceling and retrying still counts against the same project quota window.`
+                          : "Maximum requests per minute for the local cooldown."}
                         endContent={
                           <div className="pointer-events-none flex items-center">
                             <span className="text-default-400 text-small">RPM</span>
